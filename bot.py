@@ -95,6 +95,7 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
             text=text,
             reply_markup=reply_markup,
             business_connection_id=bc_id,
+            disable_web_page_preview=False,
         )
     except Exception as e:
         logger.warning(f"[send] with emoji failed: {e}, retry without")
@@ -108,6 +109,7 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
             text=clean_text,
             reply_markup=reply_markup,
             business_connection_id=bc_id,
+            disable_web_page_preview=False,
         )
 
 
@@ -119,6 +121,7 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
             message_id=message_id,
             text=text,
             reply_markup=reply_markup,
+            disable_web_page_preview=False,
         )
         logger.info("[edit] OK")
         return True
@@ -136,6 +139,7 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
                 message_id=message_id,
                 text=clean_text,
                 reply_markup=reply_markup,
+                disable_web_page_preview=False,
             )
             logger.info("[edit] OK (fallback)")
             return True
@@ -184,8 +188,7 @@ async def handle_offer(message: Message) -> None:
     text = (
         f"Usеr <b>{OFFER_USERNAME}</b> оffеrs уоu "
         f"<b>{amount_fmt}</b> {emoji} "
-        f"fоr thе gift {gift_display} "
-        f'({data["link"]}).\n\n'
+        f"fоr thе gift {gift_display}.\n\n"
         f"Тhе оffеr is vаlid fоr <b>6 h. 0 min</b>.."
     )
 
@@ -297,10 +300,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
 
     amount_fmt = f"{int(data['amount']):,}"
     gift_plain = f'{data["gift_slug"]}-{data["gift_number"]}'
-    gift_display = (
-        f'<a href="{data["link"]}"><b>{gift_plain}</b></a> '
-        f'({data["link"]})'
-    )
+    gift_display = f'<a href="{data["link"]}"><b>{gift_plain}</b></a>'
 
     if data["currency"] == "gram":
         emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>'
