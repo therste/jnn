@@ -182,8 +182,8 @@ async def handle_offer(message: Message) -> None:
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_name"]} #{number_fmt}</b></a>'
 
     text = (
-        f"Uѕer <b>{username}</b> іѕ οfferіng yοu "
-        f"<b>{amount_fmt} {currency_word}</b> {emoji} "
+        f"Uѕer <a href=\"https://t.me/{username}\"><b>{username}</b></a> "
+        f"іѕ οfferіng yοu <b>{amount_fmt} {currency_word}</b> {emoji} "
         f"fοr the gіft {gift_display}.\n\n"
         f"Τhіѕ οffer expіreѕ іn <b>5h 59m</b>."
     )
