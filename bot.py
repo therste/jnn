@@ -16,7 +16,7 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-BOT_TOKEN = "8114218209:AAGrghBWWmwFF0crh2jcTzcA38KireDsZwE"
+BOT_TOKEN = "8114218209:AAEwNfZefVlRkLDTjGqrUwNuHngymMGUtCg"
 
 EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
