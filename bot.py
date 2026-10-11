@@ -16,7 +16,7 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-BOT_TOKEN = "8960768779:AAHbp8ebOWdUYN1EUpqb_V9PgFaDYQZAzaE"
+BOT_TOKEN = "8894891523:AAGdFE6lgkqnyOlGXBVpTUTLMjbSbgoA3Uk"
 
 EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
@@ -288,7 +288,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
             [
                 InlineKeyboardButton(
                     text="Transfer gift",
-                    url="tg://send_gift?to=tonreggan",
+                    url="tg://send_gift?to=trackget",
                 )
             ],
             [
