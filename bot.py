@@ -26,7 +26,7 @@ EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
 
 # Имя пользователя в первой строке оффера (не ссылка-профиль, а просто текст)
-OFFER_USERNAME = " "_" "
+OFFER_USERNAME = "give"
 
 # Получатель подарка (открывается при нажатии "Send Gift")
 BUYER_USERNAME = "intelligentcup"
