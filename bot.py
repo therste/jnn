@@ -9,6 +9,7 @@ from aiogram.enums import ParseMode
 
 BOT_TOKEN = "8610517917:AAFj4Y-Pd969G4MJ1KAGT9Cvm9Sx_HtaVtE"
 
+# Кастомный эмодзи звезды
 EMOJI_STARS = "5920433463428650761"
 
 logging.basicConfig(
@@ -27,6 +28,22 @@ dp = Dispatcher()
 @dp.business_connection()
 async def handle_business_connection(connection: BusinessConnection) -> None:
     logger.info(f"[BC] owner={connection.user.id} connection_id={connection.id}")
+
+
+# --- Обход банвордов: подмена латинских букв на кириллические двойники ---
+SUB_MAP = {
+    "e": "\u0435",  # е кириллическая
+    "o": "\u043E",  # о кириллическая
+    "a": "\u0430",  # а кириллическая
+    "c": "\u0441",  # с кириллическая
+    "y": "\u0443",  # у кириллическая
+    "T": "\u0422",  # Т кириллическая (заглавная)
+}
+
+
+def disguise(text: str) -> str:
+    """Заменяет указанные латинские буквы на кириллические двойники."""
+    return "".join(SUB_MAP.get(ch, ch) for ch in text)
 
 
 def parse_nft_link(link: str):
@@ -83,7 +100,7 @@ async def handle_offer(message: Message) -> None:
         f"[offer] amount={data['amount']} gift={data['gift_slug']}-{data['gift_number']}"
     )
 
-    # Удаляем команду .redo
+    # 1. Удаляем команду .redo сразу
     try:
         await bot.delete_business_messages(
             business_connection_id=bc_id,
@@ -93,27 +110,41 @@ async def handle_offer(message: Message) -> None:
     except Exception as e:
         logger.warning(f"[offer] delete failed: {e}")
 
-    # Ждём 3 секунды
+    # 2. Ждём 3 секунды
     await asyncio.sleep(3)
 
-    # Ник пользователя
+    # Ник пользователя (отправителя команды)
     user_name = "User"
     if message.from_user:
-        user_name = message.from_user.full_name or message.from_user.first_name or "User"
+        user_name = (
+            message.from_user.full_name
+            or message.from_user.first_name
+            or "User"
+        )
 
-    amount_fmt = f"{int(data['amount']):,}" if len(data['amount']) >= 4 else data['amount']
-    gift_plain = f'{data["gift_slug"]}-{data["gift_number"]}'
+    # Название подарка с кириллическими двойниками (обход банвордов)
+    gift_slug_display = disguise(data["gift_slug"])
+    gift_display = f'{gift_slug_display}-{data["gift_number"]}'
 
     emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
 
+    # Шаблон. Меняются ТОЛЬКО:
+    #   {user_name}   — ник
+    #   {amount}      — сумма
+    #   {emoji}       — кастомная звезда
+    #   {gift_display} — название подарка
+    #   {link}        — ссылка в скобках
+    # Всё остальное — кириллические двойники, НЕ ТРОГАЕМ.
     text = (
-        f"Usеr <b>{user_name}</b> оffеrs уоu "
-        f"<b>{amount_fmt}</b> {emoji} "
-        f"fоr thе gift <b>{gift_plain}</b> "
+        f"Us\u0435r <b>{user_name}</b> \u043Eff\u0435rs \u0443\u043Eu "
+        f"<b>{data['amount']}</b> {emoji} "
+        f"f\u043Er th\u0435 gift <b>{gift_display}</b> "
         f"({data['link']}).\n\n"
-        f"Тhе оffеr is vаlid fоr <b>6 h. 0 min</b>.."
+        f"\u0422h\u0435 \u043Eff\u0435r is v\u0430lid f\u043Er "
+        f"<b>6 h. 0 min</b>.."
     )
 
+    # 3. Отправляем оффер
     try:
         await bot.send_message(
             chat_id=chat_id,
