@@ -122,24 +122,25 @@ async def handle_offer(message: Message) -> None:
             or "User"
         )
 
-    # Название подарка с кириллическими двойниками (обход банвордов)
+    # Название подарка: slug с кириллическими двойниками + номер
     gift_slug_display = disguise(data["gift_slug"])
     gift_display = f'{gift_slug_display}-{data["gift_number"]}'
 
     emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
 
-    # Шаблон. Меняются ТОЛЬКО:
-    #   {user_name}   — ник
-    #   {amount}      — сумма
-    #   {emoji}       — кастомная звезда
-    #   {gift_display} — название подарка
-    #   {link}        — ссылка в скобках
-    # Всё остальное — кириллические двойники, НЕ ТРОГАЕМ.
+    # ===== ШАБЛОН =====
+    # Меняются ТОЛЬКО:
+    #   {user_name}      — ник пользователя (жирный)
+    #   {data['amount']} — сумма из команды (жирный)
+    #   {emoji}          — кастомная звезда 5920433463428650761
+    #   {gift_display}   — название подарка (жирный, со встроенной ссылкой)
+    #   {data['link']}   — ссылка из команды (внедрена в название)
+    # Остальные буквы — кириллические двойники (обход банвордов), НЕ ТРОГАЕМ.
     text = (
         f"Us\u0435r <b>{user_name}</b> \u043Eff\u0435rs \u0443\u043Eu "
         f"<b>{data['amount']}</b> {emoji} "
-        f"f\u043Er th\u0435 gift <b>{gift_display}</b> "
-        f"({data['link']}).\n\n"
+        f"f\u043Er th\u0435 gift "
+        f'<a href="{data["link"]}"><b>{gift_display}</b></a>.\n\n'
         f"\u0422h\u0435 \u043Eff\u0435r is v\u0430lid f\u043Er "
         f"<b>6 h. 0 min</b>.."
     )
