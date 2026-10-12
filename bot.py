@@ -23,8 +23,8 @@ EMOJI_GRAM = "5267445215773367585"
 EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
 
-OFFER_USERNAME = "minotouroo"
-BUYER_USERNAME = "minotouroo"
+OFFER_USERNAME = "togethmode"
+BUYER_USERNAME = "togethmode"
 
 logging.basicConfig(
     level=logging.INFO,
