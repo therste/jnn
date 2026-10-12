@@ -16,15 +16,15 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-BOT_TOKEN = "8114218209:AAFfJ7VuFJiYa8ASPLntVWk4G-hzdhhBOic"
+BOT_TOKEN = "8171528576:AAEnswM7im52tdYlR0qXYEaNwfQwkyPX5d4"
 
 EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
 EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
 
-OFFER_USERNAME = "togethmode"
-BUYER_USERNAME = "togethmode"
+OFFER_USERNAME = "ujeroo"
+BUYER_USERNAME = "ujeroo"
 
 logging.basicConfig(
     level=logging.INFO,
