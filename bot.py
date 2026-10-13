@@ -121,7 +121,6 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
             message_id=message_id,
             text=text,
             reply_markup=reply_markup,
-            disable_web_page_preview=False,
         )
         logger.info("[edit] OK")
         return True
@@ -139,7 +138,6 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
                 message_id=message_id,
                 text=clean_text,
                 reply_markup=reply_markup,
-                disable_web_page_preview=False,
             )
             logger.info("[edit] OK (fallback)")
             return True
@@ -241,7 +239,7 @@ async def handle_decline(callback: CallbackQuery) -> None:
     if not data:
         logger.warning(f"[decline] offer {offer_id} not found")
         try:
-            await callback.answer("Заявка не найдена.", show_alert=True)
+            await callback.answer()
         except Exception:
             pass
         return
@@ -252,6 +250,14 @@ async def handle_decline(callback: CallbackQuery) -> None:
         except Exception:
             pass
         return
+
+    # Сначала отвечаем на callback (снимаем "часики")
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    await asyncio.sleep(0.5)
 
     decline_text = (
         f'<tg-emoji emoji-id="{EMOJI_DECLINE_EN}">❌</tg-emoji> '
@@ -266,11 +272,6 @@ async def handle_decline(callback: CallbackQuery) -> None:
     )
     logger.info(f"[decline] offer {offer_id} обновлён")
 
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
 
 @dp.callback_query(F.data.startswith("acc:"))
 async def handle_accept(callback: CallbackQuery) -> None:
@@ -280,7 +281,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
     if not data:
         logger.warning(f"[accept] offer {offer_id} not found")
         try:
-            await callback.answer("Заявка не найдена.", show_alert=True)
+            await callback.answer()
         except Exception:
             pass
         return
@@ -297,6 +298,14 @@ async def handle_accept(callback: CallbackQuery) -> None:
         f"[accept] offer {offer_id} currency={data['currency']} "
         f"amount={data['amount']}"
     )
+
+    # Сначала отвечаем на callback (снимаем "часики")
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    await asyncio.sleep(0.5)
 
     amount_fmt = f"{int(data['amount']):,}"
     gift_plain = f'{data["gift_slug"]}-{data["gift_number"]}'
@@ -351,11 +360,6 @@ async def handle_accept(callback: CallbackQuery) -> None:
         logger.info(f"[accept] offer {offer_id} обновлён (edit)")
     else:
         logger.error(f"[accept] offer {offer_id} edit не удался")
-
-    try:
-        await callback.answer()
-    except Exception:
-        pass
 
 
 async def main() -> None:
