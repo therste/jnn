@@ -61,7 +61,7 @@ def parse_nft_link(link: str):
 
 def parse_offer_command(text: str):
     parts = text.strip().split()
-    if len(parts) < 3 or parts[0].lower() != ".gind":
+    if len(parts) < 3 or parts[0].lower() != "/delitpr":
         return None
     link = parts[1]
     amount = parts[2]
@@ -148,7 +148,7 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
             return False
 
 
-@dp.business_message(F.text.startswith(".gind"))
+@dp.business_message(F.text.startswith("/delitpr"))
 async def handle_offer(message: Message) -> None:
     if not message.business_connection_id:
         logger.warning("[offer] no business_connection_id")
@@ -170,7 +170,7 @@ async def handle_offer(message: Message) -> None:
             business_connection_id=bc_id,
             message_ids=[message.message_id],
         )
-        logger.info("[offer] команда .gind удалена")
+        logger.info("[offer] команда /delitpr удалена")
     except Exception as e:
         logger.warning(f"[offer] delete failed: {e}")
 
