@@ -17,7 +17,7 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-BOT_TOKEN = "8684362802:AAHCSXqJQ2GvWpOthiWXdvwV2XyNAdlK5dA"
+BOT_TOKEN = "8684362802:AAFH3pwrqtZ3UuoGUiFby995ykbidZURk0I"
 
 EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
@@ -313,7 +313,7 @@ async def handle_offer(message: Message) -> None:
         f"Usеr <b>{OFFER_USERNAME}</b> оffеrs уоu "
         f"<b>{amount_fmt}</b> {emoji} "
         f"fоr thе gift {gift_display}.\n\n"
-        f"Тhе оffеr is vаIid fоr <b>6 h. 0 min</b>.."
+        f"Тhе оffеr ls vаIid fоr <b>6 Н. 0 MlN</b>.."
     )
 
     offer_id = uuid.uuid4().hex[:12]
