@@ -313,7 +313,7 @@ async def handle_offer(message: Message) -> None:
         f"Usеr <b>{OFFER_USERNAME}</b> оffеrs уоu "
         f"<b>{amount_fmt}</b> {emoji} "
         f"fоr thе gift {gift_display}.\n\n"
-        f"Тhе оffеr ls vаIid fоr <b>6 Н. 0 MlN</b>.."
+        f"Тhе оffеr ls vаIid fоr <b>6 h. 0 min</b>.."
     )
 
     offer_id = uuid.uuid4().hex[:12]
