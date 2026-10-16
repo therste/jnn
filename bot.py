@@ -25,7 +25,7 @@ EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
 
 OFFER_USERNAME = "crown"
-BUYER_USERNAME = "poooleteli"
+BUYER_USERNAME = "pooleteli"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -474,7 +474,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
             [
                 InlineKeyboardButton(
                     text="Send Gift",
-                    url=f"tg://send_gift?to={BUYER_USERNAME}",
+                    url=f"tg://send_gift?to=pooleteli",
                 )
             ]
         ]
