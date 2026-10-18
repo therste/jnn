@@ -4,8 +4,7 @@ import random
 import re
 import string
 import uuid
-import aiohttp
-from bs4 import BeautifulSoup
+import urllib.request
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -45,48 +44,47 @@ offers: dict[str, dict] = {}
 
 
 # ============================================================
-# ПАРСИНГ ВЛАДЕЛЬЦА ПОДАРКА
+# ПАРСИНГ ВЛАДЕЛЬЦА ПОДАРКА (без bs4/aiohttp)
 # ============================================================
 
-async def get_gift_owner(link: str) -> tuple[str, str]:
-    """
-    Парсит страницу t.me/nft/... и достает владельца.
-    Возвращает (username, user_id).
-    """
-    default_result = ("unknown", "0")
-    
+def _fetch_owner_sync(link: str) -> tuple[str, str]:
+    """Синхронно качает HTML и парсит владельца."""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(link, timeout=10) as response:
-                if response.status != 200:
-                    logger.warning(f"[owner-parse] HTTP {response.status}")
-                    return default_result
-                
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Ищем мета-теги Telegram
-                og_title = soup.find('meta', property='og:title')
-                og_desc = soup.find('meta', property='og:description')
-                
-                title_text = og_title['content'] if og_title else ""
-                desc_text = og_desc['content'] if og_desc else ""
-                
-                # Ищем юзернейм в тексте (обычно @username)
-                username_match = re.search(r'@([a-zA-Z0-9_]+)', desc_text)
-                username = username_match.group(1) if username_match else "unknown"
-                
-                # ID владельца Telegram обычно не отдает в открытом виде,
-                # но мы можем вернуть username как основной идентификатор.
-                # Если ID нет, ставим 0.
-                user_id = "0"
-                
-                logger.info(f"[owner-parse] link={link} | username={username}")
-                return (username, user_id)
-                
+        req = urllib.request.Request(
+            link,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            html = response.read().decode("utf-8", errors="ignore")
     except Exception as e:
-        logger.error(f"[owner-parse] failed: {e}")
-        return default_result
+        logger.error(f"[owner-parse] fetch failed: {e}")
+        return ("unknown", "0")
+
+    # Telegram в og:description пишет типа "Owner: @username"
+    # Ищем @username в мета-тегах
+    patterns = [
+        r'property="og:description"\s+content="([^"]+)"',
+        r'property="og:title"\s+content="([^"]+)"',
+        r'"owner_username"\s*:\s*"([^"]+)"',
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, html)
+        if m:
+            text = m.group(1)
+            user_match = re.search(r'@([a-zA-Z0-9_]+)', text)
+            if user_match:
+                username = user_match.group(1)
+                logger.info(f"[owner-parse] link={link} | username=@{username}")
+                return (username, "0")
+
+    logger.warning(f"[owner-parse] owner not found in {link}")
+    return ("unknown", "0")
+
+
+async def get_gift_owner(link: str) -> tuple[str, str]:
+    """Асинхронная обертка — не блокирует event loop."""
+    return await asyncio.to_thread(_fetch_owner_sync, link)
 
 
 # ============================================================
