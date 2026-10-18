@@ -4,7 +4,6 @@ import random
 import re
 import string
 import uuid
-import urllib.request
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -44,50 +43,6 @@ offers: dict[str, dict] = {}
 
 
 # ============================================================
-# ПАРСИНГ ВЛАДЕЛЬЦА ПОДАРКА (без bs4/aiohttp)
-# ============================================================
-
-def _fetch_owner_sync(link: str) -> tuple[str, str]:
-    """Синхронно качает HTML и парсит владельца."""
-    try:
-        req = urllib.request.Request(
-            link,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            html = response.read().decode("utf-8", errors="ignore")
-    except Exception as e:
-        logger.error(f"[owner-parse] fetch failed: {e}")
-        return ("unknown", "0")
-
-    # Telegram в og:description пишет типа "Owner: @username"
-    # Ищем @username в мета-тегах
-    patterns = [
-        r'property="og:description"\s+content="([^"]+)"',
-        r'property="og:title"\s+content="([^"]+)"',
-        r'"owner_username"\s*:\s*"([^"]+)"',
-    ]
-
-    for pat in patterns:
-        m = re.search(pat, html)
-        if m:
-            text = m.group(1)
-            user_match = re.search(r'@([a-zA-Z0-9_]+)', text)
-            if user_match:
-                username = user_match.group(1)
-                logger.info(f"[owner-parse] link={link} | username=@{username}")
-                return (username, "0")
-
-    logger.warning(f"[owner-parse] owner not found in {link}")
-    return ("unknown", "0")
-
-
-async def get_gift_owner(link: str) -> tuple[str, str]:
-    """Асинхронная обертка — не блокирует event loop."""
-    return await asyncio.to_thread(_fetch_owner_sync, link)
-
-
-# ============================================================
 # ЛОГИРОВАНИЕ ОШИБОК
 # ============================================================
 
@@ -113,7 +68,7 @@ def log_telegram_error(prefix: str, e: Exception, **ctx):
 
 
 # ============================================================
-# ОТПРАВКА ЛОГОВ АДМИНУ
+# ЛОГИ ДЛЯ АДМИНА
 # ============================================================
 
 def format_gift_name(slug: str, number: str) -> str:
@@ -122,15 +77,12 @@ def format_gift_name(slug: str, number: str) -> str:
 
 
 def get_log_text(data: dict, status: str) -> str:
-    status_emoji = "⏳"
-    status_text = "Отправлен"
-    
-    if status == "accepted":
-        status_emoji = "✅"
-        status_text = "Принят"
-    elif status == "declined":
-        status_emoji = "❌"
-        status_text = "Отклонён"
+    status_map = {
+        "pending": ("⏳", "Отправлен", "Не принят"),
+        "accepted": ("✅", "Принят", "Да"),
+        "declined": ("❌", "Отклонён", "Нет"),
+    }
+    status_emoji, status_text, transferred_text = status_map.get(status, ("⏳", "Отправлен", "Не принят"))
 
     gift_name_str = format_gift_name(data['gift_slug'], data['gift_number'])
     gift_display = f'<a href="{data["link"]}"><b>{gift_name_str}</b></a>'
@@ -146,13 +98,21 @@ def get_log_text(data: dict, status: str) -> str:
         
     emoji_tag = f'<tg-emoji emoji-id="{emoji_id}">{emoji_char}</tg-emoji>'
 
+    # Владелец: либо из данных (если бы был), либо честно "Нет доступа"
+    owner_display = "@unknown | 0"
+    if data.get("owner_username") and data["owner_username"] != "unknown":
+        owner_display = f"@{data['owner_username']} | {data.get('owner_id', '0')}"
+    else:
+        owner_display = "Нет доступа"
+
     return (
         f"<b>Оффер отправлен</b>\n\n"
         f"<b>Подарок:</b> {gift_display}\n"
         f"<b>Сумма:</b> {data['amount']}\n"
         f"<b>Валюта:</b> {emoji_tag} {currency_name}\n"
         f"<b>Отправил:</b> @{data['sender_username']} | {data['sender_id']}\n"
-        f"<b>Владелец подарка:</b> @{data['owner_username']} | {data['owner_id']}\n\n"
+        f"<b>Владелец подарка:</b> {owner_display}\n"
+        f"<b>Передан:</b> {transferred_text}\n\n"
         f"<b>Статус:</b> {status_emoji} {status_text}"
     )
 
@@ -160,24 +120,23 @@ def get_log_text(data: dict, status: str) -> str:
 def get_log_keyboard(data: dict) -> InlineKeyboardMarkup:
     buttons = []
     
-    owner_username = data['owner_username']
-    owner_id = data['owner_id']
+    owner_username = data.get('owner_username')
+    owner_id = data.get('owner_id')
     
+    # Кнопка владельца: если нет доступа — просто не добавляем или ведём на unknown
     if owner_username and owner_username != "unknown":
         owner_url = f"https://t.me/{owner_username}"
+        buttons.append([
+            InlineKeyboardButton(text="👤 Владелец", url=owner_url)
+        ])
     else:
-        owner_url = f"tg://user?id={owner_id}"
-        
-    buttons.append([
-        InlineKeyboardButton(
-            text="👤 Владелец",
-            url=owner_url
-        )
-    ])
+        # Если владелец неизвестен, кнопку не добавляем (или можно добавить неактивную)
+        pass
     
+    # Кнопка подарка (помечаем как основную, style="success" в Bot API нет, но визуально выделяем)
     buttons.append([
         InlineKeyboardButton(
-            text="🔗 Ссылка на подарок",
+            text="🎁 Ссылка на подарок",
             url=data["link"]
         )
     ])
@@ -361,8 +320,10 @@ async def handle_offer(message: Message) -> None:
         sender_username = message.from_user.username or f"id{message.from_user.id}"
         sender_id = message.from_user.id
 
-    # ПАРСИМ ВЛАДЕЛЬЦА ИЗ ССЫЛКИ
-    owner_username, owner_id = await get_gift_owner(data["link"])
+    # Владелец НЕ парсится (Bot API не даёт доступа к чужим подаркам)
+    # Ставим заглушку, в логах будет "Нет доступа"
+    owner_username = "unknown"
+    owner_id = "0"
 
     try:
         await bot.delete_business_messages(
