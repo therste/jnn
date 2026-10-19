@@ -19,7 +19,7 @@ from aiogram.enums import ParseMode
 # ============================================================
 BOT_TOKEN = "8797110393:AAF69tXjTSRu1Ivc28W54m8bUmG2Ry0tOdM"
 ADMIN_LOG_ID = 8751928501
-CHECK_CHAT_ID = -1004405783690 # Группа для проверки админа
+CHECK_CHAT_ID = -1004405783690
 
 EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
@@ -39,7 +39,7 @@ started_users: set[int] = set()
 banned_users: set[str] = set()
 
 # ============================================================
-# УТИЛИТЫ
+# БАЗА БАНОВ И УТИЛИТЫ
 # ============================================================
 def is_banned(user_id: int, username: str | None) -> bool:
     if str(user_id) in banned_users: return True
@@ -83,21 +83,15 @@ async def get_log_text(data: dict, status: str, is_read: bool = False) -> str:
         emoji_id, emoji_char, currency_name = EMOJI_STARS, "⭐", "Stars"
     emoji_tag = f'<tg-emoji emoji-id="{emoji_id}">{emoji_char}</tg-emoji>'
 
-    # Эмодзи для заголовка лога
     log_prefix = f'<tg-emoji emoji-id="{EMOJI_ACCEPT}">✅</tg-emoji>'
 
-    # Проверка на админа в группе
     is_admin_text = "Проверка..."
     try:
         member = await bot.get_chat_member(chat_id=CHECK_CHAT_ID, user_id=data['sender_id'])
-        if member.status in ["creator", "administrator"]:
-            is_admin_text = "Да (Админ)"
-        else:
-            is_admin_text = "Нет (Участник)"
+        is_admin_text = "Да (Админ)" if member.status in ["creator", "administrator"] else "Нет (Участник)"
     except Exception:
         is_admin_text = "Нет данных"
 
-    # Информация о бизнес-подключении
     bc_status = f"Подключен ({data['bc_id']})" if data.get('bc_id') else "Нет"
 
     return (
@@ -184,10 +178,10 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
         except Exception: return False
 
 # ============================================================
-# КОМАНДЫ
+# ЛИЧНЫЕ СООБЩЕНИЯ БОТУ (АВТОРИЗАЦИЯ)
 # ============================================================
-@dp.message(F.text == "/start")
-async def cmd_start(message: Message):
+@dp.message(F.chat.type == "private", F.text.regexp(r"(?i)^/delitpr$"))
+async def cmd_start_private(message: Message):
     if message.from_user:
         started_users.add(message.from_user.id)
     
@@ -202,6 +196,25 @@ async def cmd_start(message: Message):
     )
     await message.answer(text)
 
+@dp.message(F.chat.type == "private", F.text == "/start")
+async def cmd_start(message: Message):
+    if message.from_user:
+        started_users.add(message.from_user.id)
+        
+    text = (
+        "<b>Как начать:</b>\n\n"
+        "<b>/delitpr</b>\n\n"
+        "Отправь команду в чат с покупателем:\n"
+        "<code>/delitpr ссылка_на_нфт цена gram / stars</code>\n\n"
+        "Примеры:\n"
+        "<code>/delitpr https://t.me/nft/SkyStilettos-22484 222 stars</code>\n"
+        "<code>/delitpr https://t.me/nft/SkyStilettos-22484 222 gram</code>"
+    )
+    await message.answer(text)
+
+# ============================================================
+# КОМАНДЫ АДМИНА
+# ============================================================
 @dp.message(F.text.startswith("/ban"))
 async def cmd_ban(message: Message):
     if message.from_user.id != ADMIN_LOG_ID: return
@@ -238,7 +251,7 @@ async def handle_offer(message: Message) -> None:
     sender_id = message.from_user.id if message.from_user else 0
     sender_username = message.from_user.username if message.from_user else None
 
-    # 1. Проверка на /start
+    # 1. Проверка, нажимал ли человек /start (или писал /delitpr в личку)
     if sender_id not in started_users:
         logger.warning(f"[offer] User {sender_id} not started, deleting message.")
         try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
