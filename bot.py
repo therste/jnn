@@ -17,7 +17,7 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-BOT_TOKEN = "8790017360:AAHds4YnUvg-MUXGb61KwSYQ_GwEnv7-M28"
+BOT_TOKEN = "8934107325:AAFOYEcm9Xvkr9AEMozsc5oh01a5_eWmYcM"
 
 ADMIN_LOG_ID = 8912650144
 
