@@ -65,7 +65,7 @@ def format_gift_name(slug: str, number: str) -> str:
     return f"{formatted_slug} #{number}"
 
 # ============================================================
-# ЛОГИ ДЛЯ АДМИНА (из кода 2)
+# ЛОГИ ДЛЯ АДМИНА (система из кода #2)
 # ============================================================
 async def get_log_text(data: dict, status: str, is_read: bool = False) -> str:
     status_map = {
@@ -87,7 +87,7 @@ async def get_log_text(data: dict, status: str, is_read: bool = False) -> str:
 
     log_prefix = f'<tg-emoji emoji-id="{EMOJI_ACCEPT}">✅</tg-emoji>'
 
-    is_admin_text = "Нет данных"
+    is_admin_text = "Проверка..."
     try:
         member = await bot.get_chat_member(chat_id=CHECK_CHAT_ID, user_id=data['sender_id'])
         is_admin_text = "Да (Админ)" if member.status in ["creator", "administrator"] else "Нет (Участник)"
