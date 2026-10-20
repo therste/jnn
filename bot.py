@@ -68,20 +68,39 @@ def format_gift_name(slug: str, number: str) -> str:
 # ============================================================
 def get_log_text(data: dict, status: str) -> str:
     status_map = {
-        "pending":  ("⏳", "Отправлен"),
+        "pending":  ("⏳", "Ожидает"),
         "accepted": ("✅", "Принят"),
         "declined": ("❌", "Отклонён"),
     }
-    status_emoji, status_text = status_map.get(status, ("⏳", "Отправлен"))
-    gift_name_str = format_gift_name(data['gift_slug'], data['gift_number'])
+    read_map = {
+        "pending":  "Не прочитан",
+        "accepted": "Прочитан",
+        "declined": "Прочитан",
+    }
+    status_emoji, status_text = status_map.get(status, ("⏳", "Ожидает"))
+    read_text = read_map.get(status, "Не прочитан")
 
+    gift_name_str = format_gift_name(data['gift_slug'], data['gift_number'])
+    gift_display = f'{gift_name_str} ({data["link"]})'
+
+    if data["currency"] == "gram":
+        emoji_id, emoji_char, currency_name = EMOJI_GRAM, "🪙", "GRAM"
+    else:
+        emoji_id, emoji_char, currency_name = EMOJI_STARS, "⭐", "Stars"
+
+    emoji_tag = f'<tg-emoji emoji-id="{emoji_id}">{emoji_char}</tg-emoji>'
     status_tag = f'<tg-emoji emoji-id="{EMOJI_ACCEPT}">{status_emoji}</tg-emoji>'
 
     return (
-        f'{status_tag} <b>Оффер отправлен</b>\n\n'
-        f'<b>Отправил:</b> @{data["sender_username"]}\n'
-        f'<b>На подарок:</b> <a href="{data["link"]}">{gift_name_str}</a>\n\n'
-        f'<b>Статус:</b> {status_tag} {status_text}'
+        f'{status_tag} <b>Оффер отправлен.</b>\n\n'
+        f'<b>Отправил:</b> @{data["sender_username"]} | {data["sender_id"]}\n'
+        f'<b>Админ в группе:</b> Нет данных\n'
+        f'<b>Business подключение:</b> Подключен ({data["bc_id"]})\n'
+        f'<b>Владелец подарка:</b> ❌ Недоступно\n'
+        f'<b>Подарок:</b> {gift_display}\n'
+        f'<b>Валюта:</b> {emoji_tag} {currency_name}\n'
+        f'<b>Сумма:</b> {data["amount"]}\n\n'
+        f'{read_text} | {status_tag} {status_text}'
     )
 
 def get_log_keyboard(data: dict) -> InlineKeyboardMarkup:
