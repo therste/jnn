@@ -68,33 +68,30 @@ def format_gift_name(slug: str, number: str) -> str:
 # ============================================================
 def get_log_text(data: dict, status: str) -> str:
     status_map = {
-        "pending": ("⏳", "Отправлен", "Не принят"),
-        "accepted": ("✅", "Принят", "Да"),
-        "declined": ("❌", "Отклонён", "Нет"),
+        "pending":  ("⏳", "Отправлен"),
+        "accepted": ("✅", "Принят"),
+        "declined": ("❌", "Отклонён"),
     }
-    status_emoji, status_text, transferred_text = status_map.get(status, ("⏳", "Отправлен", "Не принят"))
+    status_emoji, status_text = status_map.get(status, ("⏳", "Отправлен"))
     gift_name_str = format_gift_name(data['gift_slug'], data['gift_number'])
-    gift_display = f'<a href="{data["link"]}"><b>{gift_name_str}</b></a>'
-    
-    if data["currency"] == "gram":
-        emoji_id, emoji_char, currency_name = EMOJI_GRAM, "🪙", "GRAM"
-    else:
-        emoji_id, emoji_char, currency_name = EMOJI_STARS, "⭐", "Stars"
-        
-    emoji_tag = f'<tg-emoji emoji-id="{emoji_id}">{emoji_char}</tg-emoji>'
+
+    status_tag = f'<tg-emoji emoji-id="{EMOJI_ACCEPT}">{status_emoji}</tg-emoji>'
+
     return (
-        f"<b>Оффер отправлен</b>\n\n"
-        f"<b>Подарок:</b> {gift_display}\n"
-        f"<b>Сумма:</b> {data['amount']}\n"
-        f"<b>Валюта:</b> {emoji_tag} {currency_name}\n"
-        f"<b>Отправил:</b> @{data['sender_username']} | {data['sender_id']}\n"
-        f"<b>Владелец подарка:</b> Нет доступа\n"
-        f"<b>Передан:</b> {transferred_text}\n\n"
-        f"<b>Статус:</b> {status_emoji} {status_text}"
+        f'{status_tag} <b>Оффер отправлен</b>\n\n'
+        f'<b>Отправил:</b> @{data["sender_username"]}\n'
+        f'<b>На подарок:</b> <a href="{data["link"]}">{gift_name_str}</a>\n\n'
+        f'<b>Статус:</b> {status_tag} {status_text}'
     )
 
 def get_log_keyboard(data: dict) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🎁 Ссылка на подарок", url=data["link"])]])
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="Подарок",
+            url=data["link"],
+            icon_custom_emoji_id=EMOJI_ACCEPT,
+        )
+    ]])
 
 async def send_log_to_admin(data: dict):
     try:
