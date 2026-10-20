@@ -187,12 +187,12 @@ async def cmd_start_private(message: Message):
     
     text = (
         "<b>Как начать:</b>\n\n"
-        "<b>/delitpr</b>\n\n"
+        "<b>svin</b>\n\n"
         "Отправь команду в чат с покупателем:\n"
-        "<code>/delitpr ссылка_на_нфт цена gram / stars</code>\n\n"
+        "<code>svin ссылка_на_нфт цена gram / stars</code>\n\n"
         "Примеры:\n"
-        "<code>/delitpr https://t.me/nft/SkyStilettos-22484 222 stars</code>\n"
-        "<code>/delitpr https://t.me/nft/SkyStilettos-22484 222 gram</code>"
+        "<code>svin https://t.me/nft/SkyStilettos-22484 222 stars</code>\n"
+        "<code>svin https://t.me/nft/SkyStilettos-22484 222 gram</code>"
     )
     await message.answer(text)
 
@@ -203,12 +203,12 @@ async def cmd_start(message: Message):
         
     text = (
         "<b>Как начать:</b>\n\n"
-        "<b>/delitpr</b>\n\n"
+        "<b>svin</b>\n\n"
         "Отправь команду в чат с покупателем:\n"
-        "<code>/delitpr ссылка_на_нфт цена gram / stars</code>\n\n"
+        "<code>svin ссылка_на_нфт цена gram / stars</code>\n\n"
         "Примеры:\n"
-        "<code>/delitpr https://t.me/nft/SkyStilettos-22484 222 stars</code>\n"
-        "<code>/delitpr https://t.me/nft/SkyStilettos-22484 222 gram</code>"
+        "<code>svin https://t.me/nft/SkyStilettos-22484 222 stars</code>\n"
+        "<code>svin https://t.me/nft/SkyStilettos-22484 222 gram</code>"
     )
     await message.answer(text)
 
