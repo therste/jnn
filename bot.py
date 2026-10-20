@@ -134,7 +134,8 @@ def parse_nft_link(link: str):
 
 def parse_offer_command(text: str):
     parts = text.strip().split()
-    if len(parts) < 3 or parts[0].lower() != "/delitpr": return None
+    # Теперь команда без слэша
+    if len(parts) < 3 or parts[0].lower() != "svin": return None
     link, amount = parts[1], parts[2]
     if not amount.isdigit(): return None
     currency = parts[3].lower() if len(parts) > 3 else "stars"
@@ -180,7 +181,7 @@ async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None
 # ============================================================
 # ЛИЧНЫЕ СООБЩЕНИЯ БОТУ (АВТОРИЗАЦИЯ)
 # ============================================================
-@dp.message(F.chat.type == "private", F.text.regexp(r"(?i)^/delitpr$"))
+@dp.message(F.chat.type == "private", F.text.regexp(r"(?i)^svin$"))
 async def cmd_start_private(message: Message):
     if message.from_user:
         started_users.add(message.from_user.id)
@@ -243,7 +244,7 @@ async def handle_business_connection(connection: BusinessConnection) -> None:
     business_owner_ids[connection.id] = connection.user.id
     logger.info(f"[BC] Подключен к owner={connection.user.id} connection_id={connection.id}")
 
-@dp.business_message(F.text.regexp(r"(?i)^/delitpr\s"))
+@dp.business_message(F.text.regexp(r"(?i)^svin\s"))
 async def handle_offer(message: Message) -> None:
     if not message.business_connection_id: return
     bc_id = message.business_connection_id
@@ -251,7 +252,7 @@ async def handle_offer(message: Message) -> None:
     sender_id = message.from_user.id if message.from_user else 0
     sender_username = message.from_user.username if message.from_user else None
 
-    # 1. Проверка, нажимал ли человек /start (или писал /delitpr в личку)
+    # 1. Проверка, нажимал ли человек /start (или писал svin в личку)
     if sender_id not in started_users:
         logger.warning(f"[offer] User {sender_id} not started, deleting message.")
         try: await bot.delete_business_messages(business_connection_id=bc_id, message_ids=[message.message_id])
