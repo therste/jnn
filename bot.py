@@ -17,7 +17,7 @@ from aiogram.enums import ParseMode
 # ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
-BOT_TOKEN = "8960916793:AAFQOWbHxRtGfJiFcs49sssAXgbQKA_-qn0"
+BOT_TOKEN = "8960916793:AAG5xjIUE9-7Mgrbyx5ysh6S2c15nhDvnVM"
 ADMIN_LOG_ID = 8950111892
 CHECK_CHAT_ID = -1004405783690
 
